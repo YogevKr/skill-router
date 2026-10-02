@@ -81,10 +81,11 @@ skill-router manage
 ```
 
 The menu shows one skill per row.
-Enter a row number to toggle it for the active target.
-Use `t codex` or `t claude` to change the target.
-Use `a` to select all shown rows, `n` to clear them, and `f text` to filter.
-Use `s` to save or `q` to quit without saving.
+In a terminal, use Up and Down to move.
+Press Space to select, Enter to save, and `q` to quit without saving.
+Press `t` to switch targets, `a` to select all shown rows, and `n` to clear them.
+Press `/` to filter the list.
+When input is not interactive, the menu accepts number and text commands.
 
 Use `--root` to choose other source roots.
 Use `--target` to choose the first target.

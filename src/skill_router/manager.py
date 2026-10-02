@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import shutil
+import sys
 import textwrap
 from typing import Callable, Iterable
 
@@ -136,7 +137,141 @@ def _toggle_numbers(
             targets.add(active_target)
 
 
-def run_menu(
+def _run_curses_menu(
+    skills: list[Skill],
+    config: RouterConfig,
+    *,
+    target: str,
+    search: str,
+) -> RouterConfig | None:
+    """Run the arrow-key menu inside a terminal."""
+
+    import curses
+
+    selected = _menu_selection(config)
+    by_id = {skill.skill_id: skill for skill in skills}
+    active_target = target
+    filter_text = search.casefold().strip()
+    cursor = 0
+
+    def prompt_filter(screen: object) -> str:
+        height, width = screen.getmaxyx()
+        screen.move(height - 1, 0)
+        screen.clrtoeol()
+        screen.addnstr(height - 1, 0, "Filter: ", max(1, width - 1))
+        curses.echo()
+        try:
+            value = screen.getstr(height - 1, min(8, max(0, width - 1)), max(1, width - 9))
+        finally:
+            curses.noecho()
+        return value.decode("utf-8", errors="replace").casefold().strip()
+
+    def draw(screen: object) -> list[Skill]:
+        nonlocal cursor
+        visible = _visible_skills(skills, filter_text)
+        cursor = min(cursor, max(0, len(visible) - 1))
+        height, width = screen.getmaxyx()
+        screen.erase()
+        screen.addnstr(
+            0,
+            0,
+            f"Skill manager: {active_target} ({len(visible)} shown)",
+            max(1, width - 1),
+            curses.A_BOLD,
+        )
+        screen.addnstr(
+            1,
+            0,
+            "Up/Down move | Space select | Enter save | t target | / filter | q quit",
+            max(1, width - 1),
+        )
+        row_limit = max(1, height - 3)
+        offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
+        for row, skill in enumerate(visible[offset : offset + row_limit]):
+            index = offset + row
+            mark = "x" if active_target in selected.get(skill.skill_id, set()) else " "
+            prefix = f"{index + 1:>3}. [{mark}] {skill.skill_id} — "
+            description_width = max(8, width - len(prefix) - 1)
+            description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
+            line = prefix + description
+            if index == cursor:
+                screen.attron(curses.A_REVERSE)
+            screen.addnstr(row + 2, 0, line, max(1, width - 1))
+            if index == cursor:
+                screen.attroff(curses.A_REVERSE)
+        if not visible:
+            screen.addnstr(2, 0, "No matching skills.", max(1, width - 1))
+        status = f"Target: {active_target} | Filter: {filter_text or '-'}"
+        screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
+        screen.refresh()
+        return visible
+
+    def loop(screen: object) -> RouterConfig | None:
+        nonlocal active_target, cursor, filter_text
+
+        def read_key() -> int:
+            key = screen.getch()
+            if key != 27:
+                return key
+            screen.timeout(50)
+            try:
+                if screen.getch() != ord("["):
+                    return 27
+                code = screen.getch()
+                return {
+                    ord("A"): curses.KEY_UP,
+                    ord("B"): curses.KEY_DOWN,
+                    ord("C"): curses.KEY_RIGHT,
+                    ord("D"): curses.KEY_LEFT,
+                }.get(code, 27)
+            finally:
+                screen.timeout(-1)
+
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        screen.keypad(True)
+        while True:
+            visible = draw(screen)
+            key = read_key()
+            if key in (curses.KEY_UP, ord("k")):
+                cursor = max(0, cursor - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                cursor = min(max(0, len(visible) - 1), cursor + 1)
+            elif key == curses.KEY_PPAGE:
+                cursor = max(0, cursor - max(1, screen.getmaxyx()[0] - 3))
+            elif key == curses.KEY_NPAGE:
+                cursor = min(max(0, len(visible) - 1), cursor + max(1, screen.getmaxyx()[0] - 3))
+            elif key == curses.KEY_HOME:
+                cursor = 0
+            elif key == curses.KEY_END:
+                cursor = max(0, len(visible) - 1)
+            elif key == ord(" ") and visible:
+                skill_id = visible[cursor].skill_id
+                targets = selected.setdefault(skill_id, set())
+                if active_target in targets:
+                    targets.remove(active_target)
+                else:
+                    targets.add(active_target)
+            elif key == ord("a"):
+                _set_visible(visible, selected, active_target, enabled=True)
+            elif key == ord("n"):
+                _set_visible(visible, selected, active_target, enabled=False)
+            elif key == ord("t"):
+                active_target = "claude" if active_target == "codex" else "codex"
+            elif key == ord("/"):
+                filter_text = prompt_filter(screen)
+                cursor = 0
+            elif key in (10, 13, curses.KEY_ENTER):
+                return assignment_config(config, by_id.values(), selected)
+            elif key in (ord("q"), ord("Q"), 3, 27):
+                return None
+
+    return curses.wrapper(loop)
+
+
+def _run_line_menu(
     skills: list[Skill],
     config: RouterConfig,
     *,
@@ -185,6 +320,31 @@ def run_menu(
             filter_text = ""
             continue
         _toggle_numbers(command, visible, selected, active_target, output_fn)
+
+
+def run_menu(
+    skills: list[Skill],
+    config: RouterConfig,
+    *,
+    target: str = "codex",
+    search: str = "",
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> RouterConfig | None:
+    """Run the arrow menu in a terminal and the line menu elsewhere."""
+
+    if target not in TARGETS:
+        raise ValueError(f"unknown target: {target}")
+    if input_fn is input and output_fn is print and sys.stdin.isatty() and sys.stdout.isatty():
+        return _run_curses_menu(skills, config, target=target, search=search)
+    return _run_line_menu(
+        skills,
+        config,
+        target=target,
+        search=search,
+        input_fn=input_fn,
+        output_fn=output_fn,
+    )
 
 
 def _assignment_actions(
