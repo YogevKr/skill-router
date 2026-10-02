@@ -17,6 +17,7 @@ from .config import (
     RouterConfig,
     SkillAssignment,
 )
+from .state import SkillState, claude_plugin_roots, inspect_skills
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,11 @@ def default_source_roots() -> list[Path]:
     """Return the personal skill roots used by the manager."""
 
     home = Path.home()
-    return [home / ".agents" / "skills", home / ".codex" / "skills", home / ".claude" / "skills"]
+    return claude_plugin_roots() + [
+        home / ".agents" / "skills",
+        home / ".codex" / "skills",
+        home / ".claude" / "skills",
+    ]
 
 
 def assignment_config(
@@ -81,22 +86,46 @@ def _visible_skills(skills: list[Skill], filter_text: str) -> list[Skill]:
     ]
 
 
+def _menu_states(skills: list[Skill], config: RouterConfig) -> dict[str, SkillState]:
+    return {row.skill.skill_id: row for row in inspect_skills(skills, config)}
+
+
+def _native_mark(exposure: str) -> str:
+    return "yes" if exposure == "native" else "no"
+
+
+def _router_mark(skill_id: str, selected: dict[str, set[str]], target: str) -> str:
+    return "yes" if target in selected.get(skill_id, set()) else "no"
+
+
 def _render_menu(
     visible: list[Skill],
     active_target: str,
     selected: dict[str, set[str]],
+    states: dict[str, SkillState],
     output_fn: Callable[[str], None],
 ) -> None:
     output_fn("")
-    output_fn(f"Skill manager: {active_target} ({len(visible)} shown)")
+    output_fn(f"Skill manager: edit router target {active_target} ({len(visible)} shown)")
     terminal_width = shutil.get_terminal_size(fallback=(120, 24)).columns
+    skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
+    output_fn(
+        f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  {'router codex':<12}  "
+        f"{'codex native':<12}  claude native"
+    )
     for index, skill in enumerate(visible, 1):
-        mark = "x" if active_target in selected.get(skill.skill_id, set()) else " "
-        prefix = f"{index:>3}. [{mark}] {skill.skill_id} — "
-        description_width = max(32, min(120, terminal_width - len(prefix)))
+        state = states[skill.skill_id]
+        prefix = (
+            f"{index:>3}. {skill.skill_id:<{skill_width}}  "
+            f"{_router_mark(skill.skill_id, selected, 'claude'):<13}  "
+            f"{_router_mark(skill.skill_id, selected, 'codex'):<12}  "
+            f"{_native_mark(state.codex_exposure):<12}  {_native_mark(state.claude_exposure)} — "
+        )
+        description_width = max(8, terminal_width - len(prefix))
         description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
         output_fn(prefix + description)
-    output_fn("Commands: number(s) toggle | a all | n none | t codex/claude | f text | s save | q quit")
+    output_fn("Commands: number(s) toggle router | a all | n none | t target | f text | s save | q quit")
+    output_fn("Native columns are read-only. Run sync --apply to apply saved router links.")
 
 
 def _set_visible(
@@ -150,6 +179,7 @@ def _run_curses_menu(
 
     selected = _menu_selection(config)
     by_id = {skill.skill_id: skill for skill in skills}
+    states = _menu_states(skills, config)
     active_target = target
     filter_text = search.casefold().strip()
     cursor = 0
@@ -175,7 +205,7 @@ def _run_curses_menu(
         screen.addnstr(
             0,
             0,
-            f"Skill manager: {active_target} ({len(visible)} shown)",
+            f"Skill manager: edit router target {active_target} ({len(visible)} shown)",
             max(1, width - 1),
             curses.A_BOLD,
         )
@@ -185,12 +215,23 @@ def _run_curses_menu(
             "Up/Down move | Space select | Enter save | t target | / filter | q quit",
             max(1, width - 1),
         )
-        row_limit = max(1, height - 3)
+        skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
+        columns = (
+            f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  "
+            f"{'router codex':<12}  {'codex native':<12}  claude native"
+        )
+        screen.addnstr(2, 0, columns, max(1, width - 1), curses.A_DIM)
+        row_limit = max(1, height - 4)
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):
             index = offset + row
-            mark = "x" if active_target in selected.get(skill.skill_id, set()) else " "
-            prefix = f"{index + 1:>3}. [{mark}] {skill.skill_id} — "
+            state = states[skill.skill_id]
+            prefix = (
+                f"{index + 1:>3}. {skill.skill_id:<{skill_width}}  "
+                f"{_router_mark(skill.skill_id, selected, 'claude'):<13}  "
+                f"{_router_mark(skill.skill_id, selected, 'codex'):<12}  "
+                f"{_native_mark(state.codex_exposure):<12}  {_native_mark(state.claude_exposure)} — "
+            )
             description_width = max(8, width - len(prefix) - 1)
             description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
             line = prefix + description
@@ -201,7 +242,7 @@ def _run_curses_menu(
                 screen.attroff(curses.A_REVERSE)
         if not visible:
             screen.addnstr(2, 0, "No matching skills.", max(1, width - 1))
-        status = f"Target: {active_target} | Filter: {filter_text or '-'}"
+        status = f"Edit: {active_target} | Native columns read-only | Filter: {filter_text or '-'}"
         screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
         screen.refresh()
         return visible
@@ -293,10 +334,11 @@ def _run_line_menu(
     filter_text = search.casefold().strip()
     active_target = target
     by_id = {skill.skill_id: skill for skill in skills}
+    states = _menu_states(skills, config)
 
     while True:
         visible = _visible_skills(skills, filter_text)
-        _render_menu(visible, active_target, selected, output_fn)
+        _render_menu(visible, active_target, selected, states, output_fn)
         command = input_fn("manage> ").strip()
         lowered = command.casefold()
         if lowered == "q":

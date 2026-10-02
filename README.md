@@ -105,7 +105,8 @@ skill-router status
 skill-router status --json
 ```
 
-`router` lists saved targets. The native columns show direct exposure.
+`router claude` and `router codex` show saved assignments.
+The native columns show direct exposure.
 The JSON view also includes Claude modes, locks, sources, and paths.
 
 Assignments persist in `~/.config/skill-router/config.toml`.

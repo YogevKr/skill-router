@@ -206,12 +206,20 @@ def _assignments_command(args: argparse.Namespace) -> int:
 
 def _print_status_rows(values: list[dict[str, object]]) -> int:
     skill_width = max([len("skill"), *(len(str(row["id"])) for row in values)], default=5)
-    print(f"{'skill':<{skill_width}}  {'router':<12}  {'codex native':<12}  claude native")
+    print(
+        f"{'skill':<{skill_width}}  {'router claude':<13}  {'router codex':<12}  "
+        f"{'codex native':<12}  claude native"
+    )
     for row in values:
-        router = ",".join(row["router"]) or "-"
+        router = row["router"]
+        router_claude = "yes" if "claude" in router else "no"
+        router_codex = "yes" if "codex" in router else "no"
         codex_native = "yes" if row["codex"] == "native" else "no"
         claude_native = "yes" if row["claude"] == "native" else "no"
-        print(f"{row['id']:<{skill_width}}  {router:<12}  {codex_native:<12}  {claude_native}")
+        print(
+            f"{row['id']:<{skill_width}}  {router_claude:<13}  {router_codex:<12}  "
+            f"{codex_native:<12}  {claude_native}"
+        )
     return 0
 
 

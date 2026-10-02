@@ -318,7 +318,7 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         ):
             run_menu([skill], RouterConfig(), input_fn=lambda _: "s", output_fn=output.append)
 
-        row = next(value for value in output if "long —" in value)
+        row = next(value for value in output if value.lstrip().startswith("1.") and "long" in value)
         self.assertLessEqual(len(row), 70)
         self.assertTrue(row.endswith("..."))
 
