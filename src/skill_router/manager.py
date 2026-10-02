@@ -16,6 +16,7 @@ from .config import (
     ManagedLink,
     RouterConfig,
     SkillAssignment,
+    effective_native_targets,
 )
 from .state import SkillState, claude_plugin_roots, inspect_skills
 
@@ -47,18 +48,29 @@ def assignment_config(
     config: RouterConfig,
     skills: Iterable[Skill],
     selected: dict[str, set[str]],
+    native_selected: dict[str, set[str]] | None = None,
 ) -> RouterConfig:
-    """Apply menu selections while preserving unknown saved assignments."""
+    """Apply router and native menu selections while preserving saved assignments."""
 
     discovered = {skill.skill_id: skill for skill in skills}
     assignments = config.assignment_map()
     for skill_id, skill in discovered.items():
         targets = frozenset(selected.get(skill_id, set()) & set(TARGETS))
+        if native_selected is None:
+            current = assignments.get(skill_id)
+            native_values = (
+                effective_native_targets(current)
+                if current is not None and current.enabled
+                else frozenset()
+            )
+        else:
+            native_values = frozenset(native_selected.get(skill_id, set()) & set(TARGETS))
         assignments[skill_id] = SkillAssignment(
             skill_id=skill_id,
             source=skill.path,
             targets=targets,
-            enabled=bool(targets),
+            enabled=bool(targets or native_values),
+            native_targets=native_values,
         )
     return RouterConfig(
         jev_enabled=config.jev_enabled,
@@ -73,6 +85,31 @@ def _menu_selection(config: RouterConfig) -> dict[str, set[str]]:
         assignment.skill_id: set(assignment.targets) if assignment.enabled else set()
         for assignment in config.assignments
     }
+
+
+def _native_selection(
+    config: RouterConfig,
+    states: dict[str, SkillState] | None = None,
+) -> dict[str, set[str]]:
+    """Return saved native selections, with direct exposure as a safe baseline."""
+
+    assignments = config.assignment_map()
+    selected: dict[str, set[str]] = {}
+    for skill_id, assignment in assignments.items():
+        selected[skill_id] = (
+            set(effective_native_targets(assignment)) if assignment.enabled else set()
+        )
+    if states is None:
+        return selected
+    for skill_id, state in states.items():
+        if skill_id in assignments:
+            continue
+        targets = selected.setdefault(skill_id, set())
+        if state.codex_exposure in {"native", "managed"}:
+            targets.add("codex")
+        if state.claude_exposure in {"native", "managed"}:
+            targets.add("claude")
+    return selected
 
 
 def _visible_skills(skills: list[Skill], filter_text: str) -> list[Skill]:
@@ -90,8 +127,12 @@ def _menu_states(skills: list[Skill], config: RouterConfig) -> dict[str, SkillSt
     return {row.skill.skill_id: row for row in inspect_skills(skills, config)}
 
 
-def _native_mark(exposure: str) -> str:
-    return "yes" if exposure == "native" else "no"
+def _layer_selection(
+    router_selected: dict[str, set[str]],
+    native_selected: dict[str, set[str]],
+    layer: str,
+) -> dict[str, set[str]]:
+    return native_selected if layer == "native" else router_selected
 
 
 def _router_mark(skill_id: str, selected: dict[str, set[str]], target: str) -> str:
@@ -100,13 +141,16 @@ def _router_mark(skill_id: str, selected: dict[str, set[str]], target: str) -> s
 
 def _render_menu(
     visible: list[Skill],
+    active_layer: str,
     active_target: str,
-    selected: dict[str, set[str]],
-    states: dict[str, SkillState],
+    router_selected: dict[str, set[str]],
+    native_selected: dict[str, set[str]],
     output_fn: Callable[[str], None],
 ) -> None:
     output_fn("")
-    output_fn(f"Skill manager: edit router target {active_target} ({len(visible)} shown)")
+    output_fn(
+        f"Skill manager: edit {active_layer} target {active_target} ({len(visible)} shown)"
+    )
     terminal_width = shutil.get_terminal_size(fallback=(120, 24)).columns
     skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
     output_fn(
@@ -114,18 +158,23 @@ def _render_menu(
         f"{'codex native':<12}  claude native"
     )
     for index, skill in enumerate(visible, 1):
-        state = states[skill.skill_id]
         prefix = (
             f"{index:>3}. {skill.skill_id:<{skill_width}}  "
-            f"{_router_mark(skill.skill_id, selected, 'claude'):<13}  "
-            f"{_router_mark(skill.skill_id, selected, 'codex'):<12}  "
-            f"{_native_mark(state.codex_exposure):<12}  {_native_mark(state.claude_exposure)} — "
+            f"{_router_mark(skill.skill_id, router_selected, 'claude'):<13}  "
+            f"{_router_mark(skill.skill_id, router_selected, 'codex'):<12}  "
+            f"{_router_mark(skill.skill_id, native_selected, 'codex'):<12}  "
+            f"{_router_mark(skill.skill_id, native_selected, 'claude')} — "
         )
         description_width = max(8, terminal_width - len(prefix))
         description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
         output_fn(prefix + description)
-    output_fn("Commands: number(s) toggle router | t switch router target | a all | n none | f text | s save | q quit")
-    output_fn("Native columns are read-only. Run sync --apply to apply saved router links.")
+    output_fn(
+        "Commands: number(s) toggle | m router/native | t target | a all | n none | "
+        "f text | s save | q quit"
+    )
+    output_fn(
+        "Native off removes only router links during sync --prune; direct and plugin folders stay."
+    )
 
 
 def _set_visible(
@@ -177,9 +226,11 @@ def _run_curses_menu(
 
     import curses
 
-    selected = _menu_selection(config)
     by_id = {skill.skill_id: skill for skill in skills}
     states = _menu_states(skills, config)
+    router_selected = _menu_selection(config)
+    native_selected = _native_selection(config, states)
+    active_layer = "router"
     active_target = target
     filter_text = search.casefold().strip()
     cursor = 0
@@ -205,14 +256,14 @@ def _run_curses_menu(
         screen.addnstr(
             0,
             0,
-            f"Skill manager: edit router target {active_target} ({len(visible)} shown)",
+            f"Skill manager: edit {active_layer} target {active_target} ({len(visible)} shown)",
             max(1, width - 1),
             curses.A_BOLD,
         )
         screen.addnstr(
             1,
             0,
-            "Up/Down move | Space toggle router | Enter save | t switch router target | / filter | q quit",
+            "Up/Down move | Space toggle | m router/native | t target | Enter save | / filter | q quit",
             max(1, width - 1),
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
@@ -225,12 +276,12 @@ def _run_curses_menu(
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):
             index = offset + row
-            state = states[skill.skill_id]
             prefix = (
                 f"{index + 1:>3}. {skill.skill_id:<{skill_width}}  "
-                f"{_router_mark(skill.skill_id, selected, 'claude'):<13}  "
-                f"{_router_mark(skill.skill_id, selected, 'codex'):<12}  "
-                f"{_native_mark(state.codex_exposure):<12}  {_native_mark(state.claude_exposure)} — "
+                f"{_router_mark(skill.skill_id, router_selected, 'claude'):<13}  "
+                f"{_router_mark(skill.skill_id, router_selected, 'codex'):<12}  "
+                f"{_router_mark(skill.skill_id, native_selected, 'codex'):<12}  "
+                f"{_router_mark(skill.skill_id, native_selected, 'claude')} — "
             )
             description_width = max(8, width - len(prefix) - 1)
             description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
@@ -242,13 +293,13 @@ def _run_curses_menu(
                 screen.attroff(curses.A_REVERSE)
         if not visible:
             screen.addnstr(2, 0, "No matching skills.", max(1, width - 1))
-        status = f"Edit: {active_target} | Native columns read-only | Filter: {filter_text or '-'}"
+        status = f"Edit: {active_layer} {active_target} | Filter: {filter_text or '-'}"
         screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
         screen.refresh()
         return visible
 
     def loop(screen: object) -> RouterConfig | None:
-        nonlocal active_target, cursor, filter_text
+        nonlocal active_layer, active_target, cursor, filter_text
 
         def read_key() -> int:
             key = screen.getch()
@@ -290,22 +341,24 @@ def _run_curses_menu(
                 cursor = max(0, len(visible) - 1)
             elif key == ord(" ") and visible:
                 skill_id = visible[cursor].skill_id
+                selected = _layer_selection(router_selected, native_selected, active_layer)
                 targets = selected.setdefault(skill_id, set())
                 if active_target in targets:
                     targets.remove(active_target)
                 else:
                     targets.add(active_target)
-            elif key == ord("a"):
-                _set_visible(visible, selected, active_target, enabled=True)
-            elif key == ord("n"):
-                _set_visible(visible, selected, active_target, enabled=False)
+            elif key in (ord("a"), ord("n")):
+                selected = _layer_selection(router_selected, native_selected, active_layer)
+                _set_visible(visible, selected, active_target, enabled=key == ord("a"))
+            elif key == ord("m"):
+                active_layer = "native" if active_layer == "router" else "router"
             elif key == ord("t"):
                 active_target = "claude" if active_target == "codex" else "codex"
             elif key == ord("/"):
                 filter_text = prompt_filter(screen)
                 cursor = 0
             elif key in (10, 13, curses.KEY_ENTER):
-                return assignment_config(config, by_id.values(), selected)
+                return assignment_config(config, by_id.values(), router_selected, native_selected)
             elif key in (ord("q"), ord("Q"), 3, 27):
                 return None
 
@@ -323,32 +376,51 @@ def _run_line_menu(
 ) -> RouterConfig | None:
     """Run a line-based checkbox menu and return saved settings.
 
-    Commands are numbers to toggle, ``a`` to select all, ``n`` to clear all,
-    ``t codex`` or ``t claude`` to change target, ``f text`` to filter, ``s``
-    to save, and ``q`` to quit without saving.
+    Commands are numbers to toggle, ``m`` to switch router or native,
+    ``a`` to select all, ``n`` to clear all, ``t codex`` or ``t claude`` to
+    change target, ``f text`` to filter, ``s`` to save, and ``q`` to quit.
     """
 
     if target not in TARGETS:
         raise ValueError(f"unknown target: {target}")
-    selected = _menu_selection(config)
     filter_text = search.casefold().strip()
     active_target = target
     by_id = {skill.skill_id: skill for skill in skills}
     states = _menu_states(skills, config)
+    router_selected = _menu_selection(config)
+    native_selected = _native_selection(config, states)
+    active_layer = "router"
 
     while True:
         visible = _visible_skills(skills, filter_text)
-        _render_menu(visible, active_target, selected, states, output_fn)
+        _render_menu(
+            visible,
+            active_layer,
+            active_target,
+            router_selected,
+            native_selected,
+            output_fn,
+        )
         command = input_fn("manage> ").strip()
         lowered = command.casefold()
         if lowered == "q":
             return None
         if lowered == "s":
-            return assignment_config(config, by_id.values(), selected)
+            return assignment_config(config, by_id.values(), router_selected, native_selected)
         if lowered in {"a", "n"}:
+            selected = _layer_selection(router_selected, native_selected, active_layer)
             _set_visible(visible, selected, active_target, enabled=lowered == "a")
             continue
+        if lowered in {"m", "mode", "layer"}:
+            active_layer = "native" if active_layer == "router" else "router"
+            continue
         parts = command.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].casefold() in {"m", "mode", "layer"}:
+            if parts[1].casefold() in {"router", "native"}:
+                active_layer = parts[1].casefold()
+            else:
+                output_fn(f"Unknown layer: {parts[1]}")
+            continue
         if len(parts) == 2 and parts[0].casefold() == "t":
             if parts[1].casefold() in TARGETS:
                 active_target = parts[1].casefold()
@@ -361,6 +433,7 @@ def _run_line_menu(
         if command.casefold() in {"f", "filter"}:
             filter_text = ""
             continue
+        selected = _layer_selection(router_selected, native_selected, active_layer)
         _toggle_numbers(command, visible, selected, active_target, output_fn)
 
 
@@ -394,7 +467,8 @@ def _assignment_actions(
     roots: dict[str, Path],
     active: set[tuple[str, str]],
 ) -> list[SyncAction]:
-    if not assignment.enabled:
+    native_targets = effective_native_targets(assignment)
+    if not assignment.enabled or not native_targets:
         return []
     source_file = assignment.source.expanduser()
     if not source_file.is_file() or source_file.name != "SKILL.md":
@@ -407,11 +481,11 @@ def _assignment_actions(
                 source_file,
                 "SKILL.md missing",
             )
-            for target in sorted(assignment.targets)
+            for target in sorted(native_targets)
         ]
     source_dir = source_file.parent.resolve()
     actions: list[SyncAction] = []
-    for target in sorted(assignment.targets):
+    for target in sorted(native_targets):
         if target not in roots:
             actions.append(
                 SyncAction(
@@ -498,9 +572,19 @@ def sync_assignments(
 def config_after_sync(config: RouterConfig, actions: Iterable[SyncAction]) -> RouterConfig:
     """Return config with the links confirmed by a sync operation."""
 
-    links = tuple(
-        ManagedLink(action.target, action.skill_id, action.path, action.source)
-        for action in actions
-        if action.action in {"link", "keep"}
+    links = {
+        (link.target, link.skill_id): link
+        for link in config.managed_links
+    }
+    for action in actions:
+        key = (action.target, action.skill_id)
+        if action.action == "unlink":
+            links.pop(key, None)
+        elif action.action in {"link", "keep"}:
+            links[key] = ManagedLink(action.target, action.skill_id, action.path, action.source)
+    return replace(
+        config,
+        managed_links=tuple(
+            sorted(links.values(), key=lambda link: (link.target, link.skill_id.casefold()))
+        ),
     )
-    return replace(config, managed_links=links)

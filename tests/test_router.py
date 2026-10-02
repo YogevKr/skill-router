@@ -185,6 +185,23 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(loaded.roots()["codex"], Path(td) / "codex")
             self.assertEqual(loaded.managed_links, config.managed_links)
 
+    def test_assignment_round_trip_native_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config.toml"
+            source = Path(td) / "hey" / "SKILL.md"
+            config = RouterConfig(
+                assignments=(
+                    SkillAssignment(
+                        "hey",
+                        source,
+                        frozenset({"claude"}),
+                        native_targets=frozenset({"codex"}),
+                    ),
+                ),
+            )
+            save_config(config, path)
+            self.assertEqual(load_config(path).assignments, config.assignments)
+
     def test_target_json(self) -> None:
         with patch("skill_router.cli.load_config", return_value=RouterConfig()), patch(
             "skill_router.cli.config_path", return_value=Path("/tmp/config.toml")
@@ -240,6 +257,50 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(assignments["python-debug"].targets, frozenset({"codex"}))
         self.assertEqual(assignments["react-ui"].targets, frozenset({"claude"}))
 
+    def test_menu_controls_router_and_native_targets(self) -> None:
+        commands = iter(["1", "m", "1", "t claude", "1", "s"])
+        updated = run_menu(
+            scan_roots([self.root]),
+            RouterConfig(),
+            input_fn=lambda _: next(commands),
+            output_fn=lambda _: None,
+        )
+        assignment = updated.assignment_map()["python-debug"]
+        self.assertEqual(assignment.targets, frozenset({"codex"}))
+        self.assertEqual(assignment.native_targets, frozenset({"codex", "claude"}))
+
+    def test_sync_uses_native_targets(self) -> None:
+        source = self.root / "python-debug" / "SKILL.md"
+        codex = self.root / "codex"
+        claude = self.root / "claude"
+        config = RouterConfig(
+            target_roots=(("codex", codex), ("claude", claude)),
+            assignments=(
+                SkillAssignment(
+                    "python-debug",
+                    source,
+                    frozenset({"claude"}),
+                    native_targets=frozenset({"codex"}),
+                ),
+            ),
+        )
+        actions = sync_assignments(config)
+        self.assertEqual([(action.action, action.target) for action in actions], [("link", "codex")])
+
+    def test_prune_does_not_remove_direct_native_folder(self) -> None:
+        target = self.root / "target"
+        direct = target / "python-debug"
+        direct.mkdir(parents=True)
+        (direct / "SKILL.md").write_text("keep", encoding="utf-8")
+        config = RouterConfig(
+            target_roots=(("codex", target),),
+            managed_links=(),
+        )
+        actions = sync_assignments(config, apply=True, prune=True)
+        self.assertEqual(actions, [])
+        self.assertTrue(direct.is_dir())
+        self.assertEqual((direct / "SKILL.md").read_text(encoding="utf-8"), "keep")
+
     def test_sync_links(self) -> None:
         source = self.root / "python-debug" / "SKILL.md"
         target = self.root / "target"
@@ -260,7 +321,10 @@ class ManagerTests(SkillFixture, unittest.TestCase):
             assignments=(),
             managed_links=saved.managed_links,
         )
-        prune = sync_assignments(deselected, apply=True, prune=True)
+        applied_without_prune = sync_assignments(deselected, apply=True)
+        preserved = config_after_sync(deselected, applied_without_prune)
+        self.assertEqual(preserved.managed_links, saved.managed_links)
+        prune = sync_assignments(preserved, apply=True, prune=True)
         self.assertEqual([action.action for action in prune], ["unlink"])
         self.assertFalse((target / "python-debug").exists())
 

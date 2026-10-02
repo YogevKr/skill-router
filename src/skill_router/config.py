@@ -32,6 +32,13 @@ class SkillAssignment:
     source: Path
     targets: frozenset[str]
     enabled: bool = True
+    native_targets: frozenset[str] | None = None
+
+
+def effective_native_targets(assignment: SkillAssignment) -> frozenset[str]:
+    """Return native targets, preserving legacy assignments without that field."""
+
+    return assignment.targets if assignment.native_targets is None else assignment.native_targets
 
 
 @dataclass(frozen=True)
@@ -106,11 +113,17 @@ def _parse_assignment(skill_id: object, raw: object) -> SkillAssignment:
         raise ConfigError(f"config skill must be a table: {skill_id}")
     source = raw.get("source")
     raw_targets = raw.get("targets", [])
+    raw_native_targets = raw.get("native_targets")
     enabled = raw.get("enabled", True)
     if not isinstance(source, str) or not source.strip():
         raise ConfigError(f"config skill source must be text: {skill_id}")
     if not isinstance(raw_targets, list) or any(target not in TARGETS for target in raw_targets):
         raise ConfigError(f"config skill targets are invalid: {skill_id}")
+    if raw_native_targets is not None and (
+        not isinstance(raw_native_targets, list)
+        or any(target not in TARGETS for target in raw_native_targets)
+    ):
+        raise ConfigError(f"config skill native targets are invalid: {skill_id}")
     if not isinstance(enabled, bool):
         raise ConfigError(f"config skill enabled must be true or false: {skill_id}")
     return SkillAssignment(
@@ -118,6 +131,11 @@ def _parse_assignment(skill_id: object, raw: object) -> SkillAssignment:
         source=Path(source).expanduser(),
         targets=frozenset(raw_targets),
         enabled=enabled,
+        native_targets=(
+            frozenset(raw_native_targets)
+            if raw_native_targets is not None
+            else None
+        ),
     )
 
 
@@ -207,6 +225,11 @@ def save_config(config: RouterConfig, path: Path | None = None) -> Path:
                 file.write(f"enabled = {'true' if assignment.enabled else 'false'}\n")
                 targets = ", ".join(json.dumps(target) for target in sorted(assignment.targets))
                 file.write(f"targets = [{targets}]\n")
+                if assignment.native_targets is not None:
+                    native_targets = ", ".join(
+                        json.dumps(target) for target in sorted(assignment.native_targets)
+                    )
+                    file.write(f"native_targets = [{native_targets}]\n")
             for link in config.managed_links:
                 file.write("\n[[managed_links]]\n")
                 file.write(f"target = {json.dumps(link.target)}\n")

@@ -82,10 +82,25 @@ skill-router manage
 
 The menu shows one skill per row.
 In a terminal, use Up and Down to move.
-Press Space to select, Enter to save, and `q` to quit without saving.
-Press `t` to switch targets, `a` to select all shown rows, and `n` to clear them.
+Press Space to toggle the active column, Enter to save, and `q` to quit.
+Press `m` to switch between router and native columns.
+Press `t` to switch between Claude and Codex.
+Press `a` to select all shown rows in the active column.
+Press `n` to clear all shown rows in the active column.
 Press `/` to filter the list.
 When input is not interactive, the menu accepts number and text commands.
+
+The four columns store separate selections:
+
+| Column | Meaning |
+| --- | --- |
+| `router claude` | The router can assign this skill to Claude. |
+| `router codex` | The router can assign this skill to Codex. |
+| `codex native` | Sync may expose this skill in Codex's native skill root. |
+| `claude native` | Sync may expose this skill in Claude's native skill root. |
+
+The title shows the active cell group.
+For example, `edit native target codex` means Space changes `codex native`.
 
 Use `--root` to choose other source roots.
 Use `--target` to choose the first target.
@@ -110,7 +125,7 @@ The native columns show direct exposure.
 The JSON view also includes Claude modes, locks, sources, and paths.
 
 Assignments persist in `~/.config/skill-router/config.toml`.
-The manager does not change native skill directories when it saves.
+The manager does not change skill directories when it saves.
 
 Set target roots when you need a non-default location:
 
@@ -136,6 +151,7 @@ skill-router sync --apply
 
 The sync command never replaces an existing file, directory, or different symlink.
 Use `--prune --apply` to remove only symlinks that this tool recorded and that still point to their source.
+It never removes direct native folders or their source files.
 The default mode makes no filesystem changes.
 
 ## Jev recommendations

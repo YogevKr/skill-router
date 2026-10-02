@@ -10,7 +10,14 @@ from pathlib import Path
 import sys
 
 from .catalog import load_skill, scan_roots
-from .config import ConfigError, RouterConfig, config_path, load_config, save_config
+from .config import (
+    ConfigError,
+    RouterConfig,
+    config_path,
+    effective_native_targets,
+    load_config,
+    save_config,
+)
 from .jev import JevProvider, Recommendation, recommend_local
 from .manager import (
     config_after_sync,
@@ -190,6 +197,7 @@ def _assignments_command(args: argparse.Namespace) -> int:
             "source": str(assignment.source),
             "enabled": assignment.enabled,
             "targets": sorted(assignment.targets),
+            "native_targets": sorted(effective_native_targets(assignment)),
         }
         for assignment in current.assignments
     ]
@@ -198,7 +206,8 @@ def _assignments_command(args: argparse.Namespace) -> int:
     else:
         for assignment in values:
             print(
-                f"{assignment['id']}\t{','.join(assignment['targets']) or '-'}\t"
+                f"{assignment['id']}\trouter={','.join(assignment['targets']) or '-'}\t"
+                f"native={','.join(assignment['native_targets']) or '-'}\t"
                 f"{'enabled' if assignment['enabled'] else 'disabled'}\t{assignment['source']}"
             )
     return 0
@@ -235,11 +244,15 @@ def _status_command(args: argparse.Namespace) -> int:
         else claude_plugin_roots() + default_source_roots()
     )
     rows = inspect_skills(scan_roots(roots), current)
+    assignments = current.assignment_map()
     values = [
         {
             "id": row.skill.skill_id,
             "source": row.source,
             "router": list(row.router_targets),
+            "native_targets": sorted(effective_native_targets(assignments[row.skill.skill_id]))
+            if row.skill.skill_id in assignments and assignments[row.skill.skill_id].enabled
+            else [],
             "codex": row.codex_exposure,
             "claude": row.claude_exposure,
             "claude_mode": row.claude_mode,

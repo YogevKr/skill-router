@@ -7,6 +7,7 @@ from .config import (
     RouterConfig,
     SkillAssignment,
     config_path,
+    effective_native_targets,
     load_config,
     save_config,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "Recommendation",
     "RouterConfig",
     "SkillAssignment",
+    "effective_native_targets",
     "SyncAction",
     "assignment_config",
     "SearchResult",
