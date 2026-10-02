@@ -21,6 +21,7 @@ from skill_router.config import (
 from skill_router.jev import JevProvider, recommend_local
 from skill_router.manager import config_after_sync, run_menu, sync_assignments
 from skill_router.search import search_skills
+from skill_router.state import claude_plugin_roots, claude_skill_overrides, inspect_skills
 
 
 class FakeJevClient:
@@ -191,6 +192,39 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(main(["config", "target", "show", "--json"]), 0)
             self.assertIn('"codex"', output.getvalue())
 
+class StateTests(unittest.TestCase):
+    def test_enabled_plugin_root_uses_latest_install(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            plugin_root = home / "plugin"
+            plugin_root.mkdir()
+            settings = home / ".claude" / "settings.json"
+            settings.parent.mkdir()
+            settings.write_text('{"enabledPlugins": {"demo@market": true}}', encoding="utf-8")
+            installed = home / ".claude" / "plugins" / "installed_plugins.json"
+            installed.parent.mkdir(parents=True)
+            installed.write_text(
+                '{"plugins": {"demo@market": [{"installPath": "'
+                + str(plugin_root)
+                + '", "lastUpdated": "2026-10-01"}]}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(claude_plugin_roots(home=home, cwd=home), [plugin_root])
+
+    def test_claude_skill_overrides_read_local_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            settings = home / ".claude" / "settings.json"
+            settings.parent.mkdir()
+            settings.write_text(
+                '{"skillOverrides": {"docs": "off", "xlsx": "user-invocable-only"}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                claude_skill_overrides(home=home, cwd=home),
+                {"docs": "off", "xlsx": "user-invocable-only"},
+            )
+
 
 class ManagerTests(SkillFixture, unittest.TestCase):
     def test_menu_targets(self) -> None:
@@ -245,6 +279,33 @@ class ManagerTests(SkillFixture, unittest.TestCase):
 
         self.assertEqual([action.action for action in actions], ["conflict"])
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+
+class StateManagerTests(SkillFixture, unittest.TestCase):
+    def test_status_reads_frontmatter_mode(self) -> None:
+        skill_path = self.root / "python-debug" / "SKILL.md"
+        skill_path.write_text(
+            "---\nname: python-debug\ndisable-model-invocation: true\n---\n\nRead it.\n",
+            encoding="utf-8",
+        )
+        config = RouterConfig(target_roots=(("claude", self.root),))
+        skill = scan_roots([self.root])[0]
+        rows = inspect_skills([skill], config, home=self.root, cwd=self.root)
+        self.assertEqual(rows[0].claude_mode, "user-invocable-only")
+        self.assertEqual(rows[0].claude_lock, "frontmatter")
+
+    def test_status_separates_router_and_native_state(self) -> None:
+        codex = self.root / "codex"
+        claude = self.root / "claude"
+        source = self.root / "python-debug" / "SKILL.md"
+        config = RouterConfig(
+            target_roots=(("codex", codex), ("claude", claude)),
+            assignments=(SkillAssignment("python-debug", source, frozenset({"codex"})),),
+        )
+        skill = scan_roots([self.root])[0]
+        rows = inspect_skills([skill], config, home=self.root, cwd=self.root)
+        self.assertEqual(rows[0].router_targets, ("codex",))
+        self.assertEqual(rows[0].codex_exposure, "-")
+        self.assertEqual(rows[0].claude_mode, "-")
 
 
 class MenuDisplayTests(SkillFixture, unittest.TestCase):

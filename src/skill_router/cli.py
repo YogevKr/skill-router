@@ -19,6 +19,7 @@ from .manager import (
     sync_assignments,
 )
 from .search import search_skills
+from .state import claude_plugin_roots, inspect_skills
 
 
 def default_roots(cwd: Path | None = None) -> list[Path]:
@@ -203,6 +204,44 @@ def _assignments_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _status_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    roots = (
+        [Path(value).expanduser() for value in args.root]
+        if args.root
+        else claude_plugin_roots() + default_source_roots()
+    )
+    rows = inspect_skills(scan_roots(roots), current)
+    values = [
+        {
+            "id": row.skill.skill_id,
+            "source": row.source,
+            "router": list(row.router_targets),
+            "codex": row.codex_exposure,
+            "claude": row.claude_exposure,
+            "claude_mode": row.claude_mode,
+            "claude_override": row.claude_override,
+            "claude_lock": row.claude_lock,
+            "path": str(row.skill.path),
+        }
+        for row in rows
+    ]
+    if args.json:
+        print(json.dumps(values, indent=2))
+        return 0
+    print("skill\tsource\trouter\tcodex\tclaude\tclaude-mode\tclaude-lock")
+    for row in values:
+        print(
+            f"{row['id']}\t{row['source']}\t{','.join(row['router']) or '-'}\t"
+            f"{row['codex']}\t{row['claude']}\t{row['claude_mode']}\t{row['claude_lock']}"
+        )
+    return 0
+
+
 def _sync_command(args: argparse.Namespace) -> int:
     try:
         current = load_config()
@@ -266,6 +305,8 @@ def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
         return _manage_command(args)
     if args.command == "assignments":
         return _assignments_command(args)
+    if args.command == "status":
+        return _status_command(args)
     if args.command == "sync":
         return _sync_command(args)
     return None
@@ -318,6 +359,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     assignments = subparsers.add_parser("assignments", help="show saved skill assignments")
     assignments.add_argument("--json", action="store_true")
+
+    status = subparsers.add_parser("status", help="show router and native agent skill state")
+    status.add_argument("--root", action="append", help="skill root; repeatable")
+    status.add_argument("--json", action="store_true")
 
     sync = subparsers.add_parser("sync", help="plan or apply selected skill links")
     sync.add_argument("--apply", action="store_true", help="create safe links")
