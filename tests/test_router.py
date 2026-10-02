@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from skill_router.catalog import load_skill, scan_roots
+from skill_router.catalog import Skill, load_skill, scan_roots
 from skill_router.cli import main
 from skill_router.config import (
     ManagedLink,
@@ -245,6 +245,21 @@ class ManagerTests(SkillFixture, unittest.TestCase):
 
         self.assertEqual([action.action for action in actions], ["conflict"])
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+
+
+class MenuDisplayTests(SkillFixture, unittest.TestCase):
+    def test_description_width(self) -> None:
+        skill = Skill("long", "long", "word " * 100, self.root / "long" / "SKILL.md", "")
+        output: list[str] = []
+        with patch(
+            "skill_router.manager.shutil.get_terminal_size",
+            return_value=SimpleNamespace(columns=70, lines=24),
+        ):
+            run_menu([skill], RouterConfig(), input_fn=lambda _: "s", output_fn=output.append)
+
+        row = next(value for value in output if "long —" in value)
+        self.assertLessEqual(len(row), 70)
+        self.assertTrue(row.endswith("..."))
 
 
 if __name__ == "__main__":

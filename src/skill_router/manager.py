@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
+import shutil
+import textwrap
 from typing import Callable, Iterable
 
 from .catalog import Skill
@@ -86,9 +88,13 @@ def _render_menu(
 ) -> None:
     output_fn("")
     output_fn(f"Skill manager: {active_target} ({len(visible)} shown)")
+    terminal_width = shutil.get_terminal_size(fallback=(120, 24)).columns
     for index, skill in enumerate(visible, 1):
         mark = "x" if active_target in selected.get(skill.skill_id, set()) else " "
-        output_fn(f"{index:>3}. [{mark}] {skill.skill_id} — {skill.description}")
+        prefix = f"{index:>3}. [{mark}] {skill.skill_id} — "
+        description_width = max(32, min(120, terminal_width - len(prefix)))
+        description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
+        output_fn(prefix + description)
     output_fn("Commands: number(s) toggle | a all | n none | t codex/claude | f text | s save | q quit")
 
 
