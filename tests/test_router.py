@@ -19,7 +19,7 @@ from skill_router.config import (
     save_config,
 )
 from skill_router.jev import JevProvider, recommend_local
-from skill_router.manager import config_after_sync, run_menu, sync_assignments
+from skill_router.manager import _run_curses_menu, config_after_sync, run_menu, sync_assignments
 from skill_router.search import search_skills
 from skill_router.state import claude_plugin_roots, claude_skill_overrides, inspect_skills
 
@@ -373,6 +373,71 @@ class StateManagerTests(SkillFixture, unittest.TestCase):
 
 
 class MenuDisplayTests(SkillFixture, unittest.TestCase):
+    def test_curses_keeps_column_header_above_rows(self) -> None:
+        class FakeScreen:
+            def __init__(self) -> None:
+                self.lines: list[tuple[int, str]] = []
+
+            def getmaxyx(self) -> tuple[int, int]:
+                return (10, 120)
+
+            def erase(self) -> None:
+                pass
+
+            def addnstr(self, row: int, _column: int, value: str, *_args: object) -> None:
+                self.lines.append((row, value))
+
+            def refresh(self) -> None:
+                pass
+
+            def keypad(self, _enabled: bool) -> None:
+                pass
+
+            def getch(self) -> int:
+                return 10
+
+            def attron(self, _attribute: object) -> None:
+                pass
+
+            def attroff(self, _attribute: object) -> None:
+                pass
+
+        class FakeCurses:
+            KEY_UP = 259
+            KEY_DOWN = 258
+            KEY_PPAGE = 339
+            KEY_NPAGE = 338
+            KEY_HOME = 262
+            KEY_END = 360
+            KEY_ENTER = 343
+            A_BOLD = 1
+            A_DIM = 2
+            A_REVERSE = 3
+            error = RuntimeError
+
+            @staticmethod
+            def wrapper(function: object) -> RouterConfig | None:
+                return function(FakeScreen())
+
+            @staticmethod
+            def curs_set(_value: int) -> None:
+                pass
+
+        screen = FakeScreen()
+
+        def wrapper(function: object) -> RouterConfig | None:
+            return function(screen)
+
+        FakeCurses.wrapper = staticmethod(wrapper)
+        skill = Skill("demo", "demo", "A demo skill.", self.root / "demo" / "SKILL.md", "")
+        with patch.dict("sys.modules", {"curses": FakeCurses}):
+            _run_curses_menu([skill], RouterConfig(), target="codex", search="")
+
+        header = next(value for row, value in screen.lines if row == 2)
+        skill_row = next(value for row, value in screen.lines if row == 3)
+        self.assertIn("router claude", header)
+        self.assertTrue(skill_row.startswith("  1. demo"))
+
     def test_description_width(self) -> None:
         skill = Skill("long", "long", "word " * 100, self.root / "long" / "SKILL.md", "")
         output: list[str] = []

@@ -272,7 +272,7 @@ def _run_curses_menu(
             f"{'router codex':<12}  {'codex native':<12}  claude native"
         )
         screen.addnstr(2, 0, columns, max(1, width - 1), curses.A_DIM)
-        row_limit = max(1, height - 4)
+        row_limit = max(1, height - 5)
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):
             index = offset + row
@@ -288,7 +288,7 @@ def _run_curses_menu(
             line = prefix + description
             if index == cursor:
                 screen.attron(curses.A_REVERSE)
-            screen.addnstr(row + 2, 0, line, max(1, width - 1))
+            screen.addnstr(row + 3, 0, line, max(1, width - 1))
             if index == cursor:
                 screen.attroff(curses.A_REVERSE)
         if not visible:
