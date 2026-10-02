@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import os
 from pathlib import Path
@@ -12,6 +12,12 @@ import sys
 from .catalog import load_skill, scan_roots
 from .config import ConfigError, RouterConfig, config_path, load_config, save_config
 from .jev import JevProvider, Recommendation, recommend_local
+from .manager import (
+    config_after_sync,
+    default_source_roots,
+    run_menu,
+    sync_assignments,
+)
 from .search import search_skills
 
 
@@ -101,22 +107,168 @@ def _config_command(args: argparse.Namespace) -> int:
         return 2
     target = config_path()
     if args.config_action == "show":
-        payload = {"path": str(target), "jev": {"enabled": current.jev_enabled}}
+        return _show_config(current, target, args.json)
+
+    if args.config_action == "target":
+        return _target_command(current, target, args)
+
+    updated = replace(current, jev_enabled=args.state == "enabled")
+    save_config(updated)
+    return _print_jev_state(target, updated.jev_enabled, args.json)
+
+
+def _show_config(current: RouterConfig, target: Path, as_json: bool) -> int:
+    payload = {
+        "path": str(target),
+        "jev": {"enabled": current.jev_enabled},
+        "targets": {name: str(path) for name, path in current.roots().items()},
+        "assigned_skills": sum(assignment.enabled for assignment in current.assignments),
+    }
+    if as_json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"path\t{target}")
+        print(f"jev.enabled\t{str(current.jev_enabled).lower()}")
+    return 0
+
+
+def _target_command(current: RouterConfig, target: Path, args: argparse.Namespace) -> int:
+    if args.target_action == "show":
+        payload = {
+            "path": str(target),
+            "targets": {name: str(path) for name, path in current.roots().items()},
+        }
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
-            print(f"path\t{target}")
-            print(f"jev.enabled\t{str(current.jev_enabled).lower()}")
+            for name, path in current.roots().items():
+                print(f"{name}\t{path}")
         return 0
+    roots = current.roots()
+    roots[args.target_name] = Path(args.target_path).expanduser()
+    save_config(replace(current, target_roots=tuple(sorted(roots.items()))))
+    print(f"saved\t{args.target_name}\t{roots[args.target_name]}")
+    return 0
 
-    updated = RouterConfig(jev_enabled=args.state == "enabled")
-    save_config(updated)
-    if args.json:
-        print(json.dumps({"path": str(target), "jev": {"enabled": updated.jev_enabled}}, indent=2))
+
+def _print_jev_state(target: Path, enabled: bool, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps({"path": str(target), "jev": {"enabled": enabled}}, indent=2))
     else:
         print(f"saved\t{target}")
-        print(f"jev.enabled\t{str(updated.jev_enabled).lower()}")
+        print(f"jev.enabled\t{str(enabled).lower()}")
     return 0
+
+
+def _manage_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    roots = [Path(value).expanduser() for value in args.root] if args.root else default_source_roots()
+    skills = scan_roots(roots)
+    saved = run_menu(skills, current, target=args.target, search=args.search)
+    if saved is None:
+        print("not saved")
+        return 0
+    path = save_config(saved)
+    print(f"saved\t{path}")
+    return 0
+
+
+def _assignments_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    values = [
+        {
+            "id": assignment.skill_id,
+            "source": str(assignment.source),
+            "enabled": assignment.enabled,
+            "targets": sorted(assignment.targets),
+        }
+        for assignment in current.assignments
+    ]
+    if args.json:
+        print(json.dumps(values, indent=2))
+    else:
+        for assignment in values:
+            print(
+                f"{assignment['id']}\t{','.join(assignment['targets']) or '-'}\t"
+                f"{'enabled' if assignment['enabled'] else 'disabled'}\t{assignment['source']}"
+            )
+    return 0
+
+
+def _sync_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+        actions = sync_assignments(current, apply=args.apply, prune=args.prune)
+        if args.apply:
+            save_config(config_after_sync(current, actions))
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps([
+            {
+                "action": action.action,
+                "target": action.target,
+                "id": action.skill_id,
+                "path": str(action.path),
+                "source": str(action.source),
+                "detail": action.detail,
+            }
+            for action in actions
+        ], indent=2))
+    else:
+        mode = "applied" if args.apply else "plan"
+        print(f"{mode}\t{len(actions)} actions")
+        for action in actions:
+            detail = f"\t{action.detail}" if action.detail else ""
+            print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
+    return 0
+
+
+def _search_command(args: argparse.Namespace, roots: list[Path]) -> int:
+    results = search_skills(scan_roots(roots), args.query, limit=args.limit)
+    if args.json:
+        print(json.dumps([
+            {**_skill_json(result.skill), "score": round(result.score, 6)}
+            for result in results
+        ], indent=2))
+    else:
+        for result in results:
+            print(f"{result.skill.skill_id}\t{result.score:.3f}\t{result.skill.description}")
+    return 0
+
+
+def _load_command(args: argparse.Namespace, roots: list[Path]) -> int:
+    try:
+        skill = load_skill(args.skill_id, roots)
+    except KeyError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({**_skill_json(skill), "body": skill.body}, indent=2))
+    else:
+        print(skill.body, end="" if skill.body.endswith("\n") else "\n")
+    return 0
+
+
+def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
+    if args.command == "config":
+        return _config_command(args)
+    if args.command == "manage":
+        return _manage_command(args)
+    if args.command == "assignments":
+        return _assignments_command(args)
+    if args.command == "sync":
+        return _sync_command(args)
+    return None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -151,6 +303,26 @@ def build_parser() -> argparse.ArgumentParser:
     set_config.add_argument("setting", choices=("jev",))
     set_config.add_argument("state", choices=("enabled", "disabled"))
     set_config.add_argument("--json", action="store_true")
+    target_config = config_subparsers.add_parser("target", help="manage agent skill roots")
+    target_subparsers = target_config.add_subparsers(dest="target_action", required=True)
+    target_show = target_subparsers.add_parser("show", help="show agent skill roots")
+    target_show.add_argument("--json", action="store_true")
+    target_set = target_subparsers.add_parser("set", help="set an agent skill root")
+    target_set.add_argument("target_name", choices=("codex", "claude"))
+    target_set.add_argument("target_path")
+
+    manage = subparsers.add_parser("manage", help="select skills and agent targets")
+    manage.add_argument("--root", action="append", help="skill root; repeatable")
+    manage.add_argument("--target", choices=("codex", "claude"), default="codex")
+    manage.add_argument("--search", default="", help="initial skill filter")
+
+    assignments = subparsers.add_parser("assignments", help="show saved skill assignments")
+    assignments.add_argument("--json", action="store_true")
+
+    sync = subparsers.add_parser("sync", help="plan or apply selected skill links")
+    sync.add_argument("--apply", action="store_true", help="create safe links")
+    sync.add_argument("--prune", action="store_true", help="remove only managed links")
+    sync.add_argument("--json", action="store_true")
 
     load = subparsers.add_parser("load", help="load one skill body")
     load.add_argument("skill_id")
@@ -161,34 +333,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "config":
-        return _config_command(args)
+    persistent_result = _dispatch_persistent_command(args)
+    if persistent_result is not None:
+        return persistent_result
     roots = _roots(args.root)
     if args.command == "search":
-        results = search_skills(scan_roots(roots), args.query, limit=args.limit)
-        if args.json:
-            print(json.dumps([
-                {**_skill_json(result.skill), "score": round(result.score, 6)}
-                for result in results
-            ], indent=2))
-        else:
-            for result in results:
-                print(f"{result.skill.skill_id}\t{result.score:.3f}\t{result.skill.description}")
-        return 0
+        return _search_command(args, roots)
 
     if args.command == "recommend":
         return _recommend(args, roots)
-
-    try:
-        skill = load_skill(args.skill_id, roots)
-    except KeyError as error:
-        print(str(error), file=sys.stderr)
-        return 1
-    if args.json:
-        print(json.dumps({**_skill_json(skill), "body": skill.body}, indent=2))
-    else:
-        print(skill.body, end="" if skill.body.endswith("\n") else "\n")
-    return 0
+    return _load_command(args, roots)
 
 
 if __name__ == "__main__":

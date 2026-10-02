@@ -1,0 +1,298 @@
+"""Skill assignment and native target synchronization."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+import os
+from pathlib import Path
+from typing import Callable, Iterable
+
+from .catalog import Skill
+from .config import (
+    TARGETS,
+    ManagedLink,
+    RouterConfig,
+    SkillAssignment,
+)
+
+
+@dataclass(frozen=True)
+class SyncAction:
+    """One planned or applied target change."""
+
+    action: str
+    target: str
+    skill_id: str
+    path: Path
+    source: Path
+    detail: str = ""
+
+
+def default_source_roots() -> list[Path]:
+    """Return the personal skill roots used by the manager."""
+
+    home = Path.home()
+    return [home / ".agents" / "skills", home / ".codex" / "skills", home / ".claude" / "skills"]
+
+
+def assignment_config(
+    config: RouterConfig,
+    skills: Iterable[Skill],
+    selected: dict[str, set[str]],
+) -> RouterConfig:
+    """Apply menu selections while preserving unknown saved assignments."""
+
+    discovered = {skill.skill_id: skill for skill in skills}
+    assignments = config.assignment_map()
+    for skill_id, skill in discovered.items():
+        targets = frozenset(selected.get(skill_id, set()) & set(TARGETS))
+        assignments[skill_id] = SkillAssignment(
+            skill_id=skill_id,
+            source=skill.path,
+            targets=targets,
+            enabled=bool(targets),
+        )
+    return RouterConfig(
+        jev_enabled=config.jev_enabled,
+        target_roots=tuple(sorted(config.roots().items())),
+        assignments=tuple(sorted(assignments.values(), key=lambda item: item.skill_id.casefold())),
+        managed_links=config.managed_links,
+    )
+
+
+def _menu_selection(config: RouterConfig) -> dict[str, set[str]]:
+    return {
+        assignment.skill_id: set(assignment.targets) if assignment.enabled else set()
+        for assignment in config.assignments
+    }
+
+
+def _visible_skills(skills: list[Skill], filter_text: str) -> list[Skill]:
+    return [
+        skill
+        for skill in skills
+        if not filter_text
+        or filter_text in skill.skill_id.casefold()
+        or filter_text in skill.name.casefold()
+        or filter_text in skill.description.casefold()
+    ]
+
+
+def _render_menu(
+    visible: list[Skill],
+    active_target: str,
+    selected: dict[str, set[str]],
+    output_fn: Callable[[str], None],
+) -> None:
+    output_fn("")
+    output_fn(f"Skill manager: {active_target} ({len(visible)} shown)")
+    for index, skill in enumerate(visible, 1):
+        mark = "x" if active_target in selected.get(skill.skill_id, set()) else " "
+        output_fn(f"{index:>3}. [{mark}] {skill.skill_id} — {skill.description}")
+    output_fn("Commands: number(s) toggle | a all | n none | t codex/claude | f text | s save | q quit")
+
+
+def _set_visible(
+    visible: list[Skill],
+    selected: dict[str, set[str]],
+    target: str,
+    enabled: bool,
+) -> None:
+    for skill in visible:
+        targets = selected.setdefault(skill.skill_id, set())
+        if enabled:
+            targets.add(target)
+        else:
+            targets.discard(target)
+
+
+def _toggle_numbers(
+    command: str,
+    visible: list[Skill],
+    selected: dict[str, set[str]],
+    active_target: str,
+    output_fn: Callable[[str], None],
+) -> None:
+    try:
+        numbers = [int(value) for value in command.replace(",", " ").split()]
+    except ValueError:
+        output_fn("Enter skill numbers or a menu command.")
+        return
+    if not numbers or any(number < 1 or number > len(visible) for number in numbers):
+        output_fn("Skill number is outside the displayed list.")
+        return
+    for number in numbers:
+        skill_id = visible[number - 1].skill_id
+        targets = selected.setdefault(skill_id, set())
+        if active_target in targets:
+            targets.remove(active_target)
+        else:
+            targets.add(active_target)
+
+
+def run_menu(
+    skills: list[Skill],
+    config: RouterConfig,
+    *,
+    target: str = "codex",
+    search: str = "",
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> RouterConfig | None:
+    """Run a line-based checkbox menu and return saved settings.
+
+    Commands are numbers to toggle, ``a`` to select all, ``n`` to clear all,
+    ``t codex`` or ``t claude`` to change target, ``f text`` to filter, ``s``
+    to save, and ``q`` to quit without saving.
+    """
+
+    if target not in TARGETS:
+        raise ValueError(f"unknown target: {target}")
+    selected = _menu_selection(config)
+    filter_text = search.casefold().strip()
+    active_target = target
+    by_id = {skill.skill_id: skill for skill in skills}
+
+    while True:
+        visible = _visible_skills(skills, filter_text)
+        _render_menu(visible, active_target, selected, output_fn)
+        command = input_fn("manage> ").strip()
+        lowered = command.casefold()
+        if lowered == "q":
+            return None
+        if lowered == "s":
+            return assignment_config(config, by_id.values(), selected)
+        if lowered in {"a", "n"}:
+            _set_visible(visible, selected, active_target, enabled=lowered == "a")
+            continue
+        parts = command.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].casefold() == "t":
+            if parts[1].casefold() in TARGETS:
+                active_target = parts[1].casefold()
+            else:
+                output_fn(f"Unknown target: {parts[1]}")
+            continue
+        if len(parts) == 2 and parts[0].casefold() == "f":
+            filter_text = parts[1].casefold().strip()
+            continue
+        if command.casefold() in {"f", "filter"}:
+            filter_text = ""
+            continue
+        _toggle_numbers(command, visible, selected, active_target, output_fn)
+
+
+def _assignment_actions(
+    assignment: SkillAssignment,
+    roots: dict[str, Path],
+    active: set[tuple[str, str]],
+) -> list[SyncAction]:
+    if not assignment.enabled:
+        return []
+    source_file = assignment.source.expanduser()
+    if not source_file.is_file() or source_file.name != "SKILL.md":
+        return [
+            SyncAction(
+                "invalid-source",
+                target,
+                assignment.skill_id,
+                Path(),
+                source_file,
+                "SKILL.md missing",
+            )
+            for target in sorted(assignment.targets)
+        ]
+    source_dir = source_file.parent.resolve()
+    actions: list[SyncAction] = []
+    for target in sorted(assignment.targets):
+        if target not in roots:
+            actions.append(
+                SyncAction(
+                    "invalid-target",
+                    target,
+                    assignment.skill_id,
+                    Path(),
+                    source_file,
+                    "target root missing",
+                )
+            )
+            continue
+        active.add((target, assignment.skill_id))
+        path = roots[target].expanduser() / assignment.skill_id
+        if path.exists() or path.is_symlink():
+            action = "keep" if path.is_symlink() and path.resolve() == source_dir else "conflict"
+            detail = "" if action == "keep" else "destination exists"
+            actions.append(SyncAction(action, target, assignment.skill_id, path, source_file, detail))
+            continue
+        actions.append(SyncAction("link", target, assignment.skill_id, path, source_file))
+    return actions
+
+
+def _prune_actions(
+    managed: Iterable[ManagedLink],
+    active: set[tuple[str, str]],
+) -> list[SyncAction]:
+    actions: list[SyncAction] = []
+    for link in managed:
+        if (link.target, link.skill_id) in active:
+            continue
+        if link.path.is_symlink() and link.path.resolve() == link.source.parent.resolve():
+            actions.append(SyncAction("unlink", link.target, link.skill_id, link.path, link.source))
+        else:
+            actions.append(
+                SyncAction(
+                    "skip-prune",
+                    link.target,
+                    link.skill_id,
+                    link.path,
+                    link.source,
+                    "link changed or missing",
+                )
+            )
+    return actions
+
+
+def _apply_actions(actions: Iterable[SyncAction]) -> None:
+    for action in actions:
+        if action.action == "link":
+            action.path.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(action.source.parent.resolve(), action.path, target_is_directory=True)
+        elif action.action == "unlink":
+            action.path.unlink()
+
+
+def sync_assignments(
+    config: RouterConfig,
+    *,
+    apply: bool = False,
+    prune: bool = False,
+) -> list[SyncAction]:
+    """Plan or apply safe symlinks for selected skills.
+
+    Existing files and directories are never replaced. Pruning removes only
+    links recorded by this tool when they still point to the recorded source.
+    """
+
+    roots = config.roots()
+    actions: list[SyncAction] = []
+    active: set[tuple[str, str]] = set()
+    for assignment in config.assignments:
+        actions.extend(_assignment_actions(assignment, roots, active))
+
+    if prune:
+        actions.extend(_prune_actions(config.managed_links, active))
+
+    if not apply:
+        return actions
+    _apply_actions(actions)
+    return actions
+
+
+def config_after_sync(config: RouterConfig, actions: Iterable[SyncAction]) -> RouterConfig:
+    """Return config with the links confirmed by a sync operation."""
+
+    links = tuple(
+        ManagedLink(action.target, action.skill_id, action.path, action.source)
+        for action in actions
+        if action.action in {"link", "keep"}
+    )
+    return replace(config, managed_links=links)

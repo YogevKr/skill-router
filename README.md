@@ -2,8 +2,9 @@
 
 `skill-router` keeps task skills outside the agent context until a local search selects one.
 
-The router does not scan native Codex or Claude skill directories. It scans only explicit vault roots.
-This prevents a full skill catalog from entering every session.
+Search and recommend commands scan only explicit vault roots.
+The separate manager can inspect native Codex and Claude skill roots when you run it.
+This keeps normal routing scoped to a small catalog.
 
 ## Design
 
@@ -62,6 +63,68 @@ skill-router config set jev disabled
 `recommend` uses this saved setting when `--provider auto` is active.
 Use `--provider local` or `--provider jev` to override it for one command.
 Set `SKILL_ROUTER_CONFIG` to use another configuration path.
+
+## Manage skill assignments
+
+Use the manager to review skills from these roots:
+
+```text
+~/.agents/skills
+~/.codex/skills
+~/.claude/skills
+```
+
+Open the menu with:
+
+```sh
+skill-router manage
+```
+
+The menu shows one skill per row.
+Enter a row number to toggle it for the active target.
+Use `t codex` or `t claude` to change the target.
+Use `a` to select all shown rows, `n` to clear them, and `f text` to filter.
+Use `s` to save or `q` to quit without saving.
+
+Use `--root` to choose other source roots.
+Use `--target` to choose the first target.
+Use `--search` to set the first filter.
+
+View saved assignments with:
+
+```sh
+skill-router assignments
+skill-router assignments --json
+```
+
+Assignments persist in `~/.config/skill-router/config.toml`.
+The manager does not change native skill directories when it saves.
+
+Set target roots when you need a non-default location:
+
+```sh
+skill-router config target show
+skill-router config target set codex ~/.codex/skills
+skill-router config target set claude ~/.claude/skills
+```
+
+## Sync selected skills
+
+Review a sync plan before you apply it:
+
+```sh
+skill-router sync
+```
+
+Create missing symlinks with an explicit apply flag:
+
+```sh
+skill-router sync --apply
+```
+
+The sync command never replaces an existing file, directory, or different symlink.
+Use `--prune --apply` to remove only symlinks that this tool recorded and that still point to their source.
+The default mode makes no filesystem changes.
 
 ## Jev recommendations
 

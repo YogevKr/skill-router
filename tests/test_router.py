@@ -10,8 +10,16 @@ from unittest.mock import patch
 
 from skill_router.catalog import load_skill, scan_roots
 from skill_router.cli import main
-from skill_router.config import RouterConfig, config_path, load_config, save_config
+from skill_router.config import (
+    ManagedLink,
+    RouterConfig,
+    SkillAssignment,
+    config_path,
+    load_config,
+    save_config,
+)
 from skill_router.jev import JevProvider, recommend_local
+from skill_router.manager import config_after_sync, run_menu, sync_assignments
 from skill_router.search import search_skills
 
 
@@ -156,6 +164,87 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(load_config().jev_enabled)
             self.assertEqual(main(["config", "set", "jev", "disabled"]), 0)
             self.assertFalse(load_config().jev_enabled)
+
+    def test_assignment_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config.toml"
+            source = Path(td) / "hey" / "SKILL.md"
+            config = RouterConfig(
+                target_roots=(("codex", Path(td) / "codex"),),
+                assignments=(
+                    SkillAssignment("hey", source, frozenset({"codex"})),
+                ),
+                managed_links=(
+                    ManagedLink("codex", "hey", Path(td) / "codex" / "hey", source),
+                ),
+            )
+            save_config(config, path)
+            loaded = load_config(path)
+            self.assertEqual(loaded.assignments, config.assignments)
+            self.assertEqual(loaded.roots()["codex"], Path(td) / "codex")
+            self.assertEqual(loaded.managed_links, config.managed_links)
+
+    def test_target_json(self) -> None:
+        with patch("skill_router.cli.load_config", return_value=RouterConfig()), patch(
+            "skill_router.cli.config_path", return_value=Path("/tmp/config.toml")
+        ), redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main(["config", "target", "show", "--json"]), 0)
+            self.assertIn('"codex"', output.getvalue())
+
+
+class ManagerTests(SkillFixture, unittest.TestCase):
+    def test_menu_targets(self) -> None:
+        current = RouterConfig()
+        commands = iter(["1", "t claude", "2", "s"])
+        updated = run_menu(
+            scan_roots([self.root]),
+            current,
+            input_fn=lambda _: next(commands),
+            output_fn=lambda _: None,
+        )
+        assignments = updated.assignment_map()
+        self.assertEqual(assignments["python-debug"].targets, frozenset({"codex"}))
+        self.assertEqual(assignments["react-ui"].targets, frozenset({"claude"}))
+
+    def test_sync_links(self) -> None:
+        source = self.root / "python-debug" / "SKILL.md"
+        target = self.root / "target"
+        current = RouterConfig(
+            target_roots=(("codex", target),),
+            assignments=(SkillAssignment("python-debug", source, frozenset({"codex"})),),
+        )
+        plan = sync_assignments(current)
+        self.assertEqual([action.action for action in plan], ["link"])
+        self.assertFalse((target / "python-debug").exists())
+        actions = sync_assignments(current, apply=True)
+        self.assertTrue((target / "python-debug").is_symlink())
+        saved = config_after_sync(current, actions)
+        self.assertEqual(len(saved.managed_links), 1)
+
+        deselected = RouterConfig(
+            target_roots=current.target_roots,
+            assignments=(),
+            managed_links=saved.managed_links,
+        )
+        prune = sync_assignments(deselected, apply=True, prune=True)
+        self.assertEqual([action.action for action in prune], ["unlink"])
+        self.assertFalse((target / "python-debug").exists())
+
+    def test_sync_keeps_existing_destination(self) -> None:
+        source = self.root / "python-debug" / "SKILL.md"
+        target = self.root / "target"
+        target.mkdir()
+        existing = target / "python-debug"
+        existing.write_text("keep", encoding="utf-8")
+        config = RouterConfig(
+            target_roots=(("codex", target),),
+            assignments=(SkillAssignment("python-debug", source, frozenset({"codex"})),),
+        )
+
+        actions = sync_assignments(config, apply=True)
+
+        self.assertEqual([action.action for action in actions], ["conflict"])
+        self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":
