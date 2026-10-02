@@ -124,7 +124,7 @@ def _render_menu(
         description_width = max(8, terminal_width - len(prefix))
         description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
         output_fn(prefix + description)
-    output_fn("Commands: number(s) toggle router | a all | n none | t target | f text | s save | q quit")
+    output_fn("Commands: number(s) toggle router | t switch router target | a all | n none | f text | s save | q quit")
     output_fn("Native columns are read-only. Run sync --apply to apply saved router links.")
 
 
@@ -212,7 +212,7 @@ def _run_curses_menu(
         screen.addnstr(
             1,
             0,
-            "Up/Down move | Space select | Enter save | t target | / filter | q quit",
+            "Up/Down move | Space toggle router | Enter save | t switch router target | / filter | q quit",
             max(1, width - 1),
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
