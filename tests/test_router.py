@@ -465,6 +465,7 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         header = next(value for row, value in screen.lines if row == 2)
         skill_row = next(value for row, value in screen.lines if row == 3)
         self.assertIn("router claude", header)
+        self.assertIn("description", header)
         self.assertTrue(skill_row.startswith("  1. demo"))
 
     def test_description_width(self) -> None:

@@ -158,7 +158,7 @@ def _render_menu(
     skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
     output_fn(
         f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  {'router codex':<12}  "
-        f"{'codex native':<12}  claude native"
+        f"{'codex native':<12}  {'claude native':<13}  description"
     )
     for index, skill in enumerate(visible, 1):
         prefix = (
@@ -166,11 +166,15 @@ def _render_menu(
             f"{_router_mark(skill.skill_id, router_selected, 'claude'):<13}  "
             f"{_router_mark(skill.skill_id, router_selected, 'codex'):<12}  "
             f"{_router_mark(skill.skill_id, native_selected, 'codex'):<12}  "
-            f"{_router_mark(skill.skill_id, native_selected, 'claude')} — "
+            f"{_router_mark(skill.skill_id, native_selected, 'claude'):<13}  "
         )
-        description_width = max(8, terminal_width - len(prefix))
+        available = terminal_width - len(prefix) - 2
+        if available < 3:
+            output_fn(prefix.rstrip() + "...")
+            continue
+        description_width = max(8, available)
         description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
-        output_fn(prefix + description)
+        output_fn(prefix + "— " + description)
     output_fn(
         "Commands: number(s) toggle | m router/native | t target | a all | n none | "
         "f text | s save | q quit"
@@ -272,7 +276,8 @@ def _run_curses_menu(
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
         columns = (
             f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  "
-            f"{'router codex':<12}  {'codex native':<12}  claude native"
+            f"{'router codex':<12}  {'codex native':<12}  "
+            f"{'claude native':<13}  description"
         )
         screen.addnstr(2, 0, columns, max(1, width - 1), curses.A_DIM)
         row_limit = max(1, height - 5)
@@ -284,11 +289,11 @@ def _run_curses_menu(
                 f"{_router_mark(skill.skill_id, router_selected, 'claude'):<13}  "
                 f"{_router_mark(skill.skill_id, router_selected, 'codex'):<12}  "
                 f"{_router_mark(skill.skill_id, native_selected, 'codex'):<12}  "
-                f"{_router_mark(skill.skill_id, native_selected, 'claude')} — "
+                f"{_router_mark(skill.skill_id, native_selected, 'claude'):<13}  "
             )
-            description_width = max(8, width - len(prefix) - 1)
+            description_width = max(8, width - len(prefix) - 3)
             description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
-            line = prefix + description
+            line = prefix + "— " + description
             if index == cursor:
                 screen.attron(curses.A_REVERSE)
             screen.addnstr(row + 3, 0, line, max(1, width - 1))
