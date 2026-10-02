@@ -102,7 +102,10 @@ def _native_selection(
     if states is None:
         return selected
     for skill_id, state in states.items():
-        if skill_id in assignments:
+        assignment = assignments.get(skill_id)
+        if assignment is not None and (
+            assignment.enabled or assignment.native_targets is not None
+        ):
             continue
         targets = selected.setdefault(skill_id, set())
         if state.codex_exposure in {"native", "managed"}:

@@ -269,6 +269,35 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(assignment.targets, frozenset({"codex"}))
         self.assertEqual(assignment.native_targets, frozenset({"codex", "claude"}))
 
+    def test_menu_imports_legacy_native_state(self) -> None:
+        native_root = self.root / "codex"
+        skill_dir = native_root / "native-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: native-skill\ndescription: Native skill.\n---\n",
+            encoding="utf-8",
+        )
+        config = RouterConfig(
+            target_roots=(("codex", native_root),),
+            assignments=(
+                SkillAssignment(
+                    "native-skill",
+                    skill_dir / "SKILL.md",
+                    frozenset(),
+                    enabled=False,
+                ),
+            ),
+        )
+        output: list[str] = []
+        run_menu(
+            scan_roots([native_root]),
+            config,
+            input_fn=lambda _: "q",
+            output_fn=output.append,
+        )
+        row = next(value for value in output if value.lstrip().startswith("1."))
+        self.assertEqual(row.split(" —", 1)[0].split()[-4:], ["no", "no", "yes", "no"])
+
     def test_sync_uses_native_targets(self) -> None:
         source = self.root / "python-debug" / "SKILL.md"
         codex = self.root / "codex"
