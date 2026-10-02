@@ -98,16 +98,15 @@ skill-router assignments
 skill-router assignments --json
 ```
 
-Compare router assignments with native agent exposure and Claude's invocation state:
+Compare each skill in one view:
 
 ```sh
 skill-router status
 skill-router status --json
 ```
 
-`router` lists saved targets. `codex` and `claude` show native or managed exposure.
-`claude-mode` reads local Claude `skillOverrides` without changing them.
-`claude-lock` identifies plugin or settings ownership.
+`router` lists saved targets. The native columns show direct exposure.
+The JSON view also includes Claude modes, locks, sources, and paths.
 
 Assignments persist in `~/.config/skill-router/config.toml`.
 The manager does not change native skill directories when it saves.

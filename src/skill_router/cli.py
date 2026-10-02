@@ -204,6 +204,17 @@ def _assignments_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_status_rows(values: list[dict[str, object]]) -> int:
+    skill_width = max([len("skill"), *(len(str(row["id"])) for row in values)], default=5)
+    print(f"{'skill':<{skill_width}}  {'router':<12}  {'codex native':<12}  claude native")
+    for row in values:
+        router = ",".join(row["router"]) or "-"
+        codex_native = "yes" if row["codex"] == "native" else "no"
+        claude_native = "yes" if row["claude"] == "native" else "no"
+        print(f"{row['id']:<{skill_width}}  {router:<12}  {codex_native:<12}  {claude_native}")
+    return 0
+
+
 def _status_command(args: argparse.Namespace) -> int:
     try:
         current = load_config()
@@ -233,13 +244,7 @@ def _status_command(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(values, indent=2))
         return 0
-    print("skill\tsource\trouter\tcodex\tclaude\tclaude-mode\tclaude-lock")
-    for row in values:
-        print(
-            f"{row['id']}\t{row['source']}\t{','.join(row['router']) or '-'}\t"
-            f"{row['codex']}\t{row['claude']}\t{row['claude_mode']}\t{row['claude_lock']}"
-        )
-    return 0
+    return _print_status_rows(values)
 
 
 def _sync_command(args: argparse.Namespace) -> int:
