@@ -42,6 +42,27 @@ PYTHONPATH=src python -m skill_router.cli load python-debug \
 Set `SKILL_ROUTER_ROOT` to a colon-separated list of roots for repeated use.
 The default roots are `~/.agents/skill-vault` and `.agents/skill-vault`.
 
+## Persistent provider setting
+
+The default provider is local BM25.
+The setting file is `~/.config/skill-router/config.toml`.
+Jev stays disabled until you enable it:
+
+```sh
+skill-router config set jev enabled
+skill-router config show
+```
+
+Disable Jev again with:
+
+```sh
+skill-router config set jev disabled
+```
+
+`recommend` uses this saved setting when `--provider auto` is active.
+Use `--provider local` or `--provider jev` to override it for one command.
+Set `SKILL_ROUTER_CONFIG` to use another configuration path.
+
 ## Jev recommendations
 
 Install the optional provider:

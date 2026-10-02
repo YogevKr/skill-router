@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 
 from .catalog import load_skill, scan_roots
+from .config import ConfigError, RouterConfig, config_path, load_config, save_config
 from .jev import JevProvider, Recommendation, recommend_local
 from .search import search_skills
 
@@ -71,7 +72,14 @@ def _print_recommendation(result: Recommendation, *, as_json: bool) -> None:
 
 def _recommend(args: argparse.Namespace, roots: list[Path]) -> int:
     skills = scan_roots(roots)
-    if args.provider == "jev":
+    provider = args.provider
+    if provider == "auto":
+        try:
+            provider = "jev" if load_config().jev_enabled else "local"
+        except ConfigError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+    if provider == "jev":
         result = JevProvider(
             model=args.model,
             timeout=args.timeout,
@@ -82,6 +90,32 @@ def _recommend(args: argparse.Namespace, roots: list[Path]) -> int:
     else:
         result = recommend_local(skills, args.query, limit=args.limit)
     _print_recommendation(result, as_json=args.json)
+    return 0
+
+
+def _config_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    target = config_path()
+    if args.config_action == "show":
+        payload = {"path": str(target), "jev": {"enabled": current.jev_enabled}}
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"path\t{target}")
+            print(f"jev.enabled\t{str(current.jev_enabled).lower()}")
+        return 0
+
+    updated = RouterConfig(jev_enabled=args.state == "enabled")
+    save_config(updated)
+    if args.json:
+        print(json.dumps({"path": str(target), "jev": {"enabled": updated.jev_enabled}}, indent=2))
+    else:
+        print(f"saved\t{target}")
+        print(f"jev.enabled\t{str(updated.jev_enabled).lower()}")
     return 0
 
 
@@ -99,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         "recommend", help="select at most one skill with local search or Jev"
     )
     recommend.add_argument("query")
-    recommend.add_argument("--provider", choices=("local", "jev"), default="local")
+    recommend.add_argument("--provider", choices=("auto", "local", "jev"), default="auto")
     recommend.add_argument("--root", action="append", help="skill vault root; repeatable")
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--shortlist-limit", type=int, default=8)
@@ -108,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
     recommend.add_argument("--confidence-threshold", type=float, default=0.30)
     recommend.add_argument("--fit-threshold", type=float, default=0.30)
     recommend.add_argument("--json", action="store_true")
+
+    config = subparsers.add_parser("config", help="manage persistent router settings")
+    config_subparsers = config.add_subparsers(dest="config_action", required=True)
+    show = config_subparsers.add_parser("show", help="show saved settings")
+    show.add_argument("--json", action="store_true")
+    set_config = config_subparsers.add_parser("set", help="set a saved setting")
+    set_config.add_argument("setting", choices=("jev",))
+    set_config.add_argument("state", choices=("enabled", "disabled"))
+    set_config.add_argument("--json", action="store_true")
 
     load = subparsers.add_parser("load", help="load one skill body")
     load.add_argument("skill_id")
@@ -118,6 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "config":
+        return _config_command(args)
     roots = _roots(args.root)
     if args.command == "search":
         results = search_skills(scan_roots(roots), args.query, limit=args.limit)

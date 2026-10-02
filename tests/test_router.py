@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
 from skill_router.catalog import load_skill, scan_roots
+from skill_router.cli import main
+from skill_router.config import RouterConfig, config_path, load_config, save_config
 from skill_router.jev import JevProvider, recommend_local
 from skill_router.search import search_skills
 
@@ -117,6 +122,40 @@ class JevTests(SkillFixture, unittest.TestCase):
         self.assertEqual(result.provider, "local")
         self.assertEqual(result.skill.skill_id, "python-debug")
         self.assertIn("offline", result.error)
+
+
+class ConfigTests(unittest.TestCase):
+    def test_config_defaults_to_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            "os.environ", {"SKILL_ROUTER_CONFIG": str(Path(td) / "config.toml")}
+        ):
+            self.assertFalse(load_config().jev_enabled)
+
+    def test_config_persists_jev_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            "os.environ", {"SKILL_ROUTER_CONFIG": str(Path(td) / "config.toml")}
+        ):
+            path = save_config(RouterConfig(jev_enabled=True))
+            self.assertEqual(path, config_path())
+            self.assertTrue(load_config().jev_enabled)
+
+    def test_config_rejects_invalid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            "os.environ", {"SKILL_ROUTER_CONFIG": str(Path(td) / "config.toml")}
+        ):
+            config = Path(td) / "config.toml"
+            config.write_text("[jev]\nenabled = 'yes'\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config()
+
+    def test_cli_persists_provider_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            "os.environ", {"SKILL_ROUTER_CONFIG": str(Path(td) / "config.toml")}
+        ), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["config", "set", "jev", "enabled"]), 0)
+            self.assertTrue(load_config().jev_enabled)
+            self.assertEqual(main(["config", "set", "jev", "disabled"]), 0)
+            self.assertFalse(load_config().jev_enabled)
 
 
 if __name__ == "__main__":
