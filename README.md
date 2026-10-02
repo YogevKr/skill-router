@@ -7,15 +7,20 @@ This prevents a full skill catalog from entering every session.
 
 ## Design
 
-The first version uses a local BM25 search over skill metadata.
+The router uses local BM25 search over skill metadata.
 It reads `SKILL.md` files from configured roots and returns a small ranked list.
 The `load` command returns the full body after explicit selection.
 
+An optional Jev provider can rerank a local shortlist.
+Jev receives the request and candidate metadata.
+It never receives skill bodies during routing.
+
 ```text
-task -> local metadata search -> selected skill ID -> load SKILL.md
+task -> local metadata search -> optional Jev choice -> selected skill ID -> load SKILL.md
 ```
 
-The router has no network dependency and sends no task or skill data to a remote model.
+Local routing has no network dependency.
+Jev routing uses the TypeSafe API only when you select the Jev provider.
 
 ## Quick start
 
@@ -36,6 +41,33 @@ PYTHONPATH=src python -m skill_router.cli load python-debug \
 
 Set `SKILL_ROUTER_ROOT` to a colon-separated list of roots for repeated use.
 The default roots are `~/.agents/skill-vault` and `.agents/skill-vault`.
+
+## Jev recommendations
+
+Install the optional provider:
+
+```sh
+python -m pip install 'skill-router[jev]'
+```
+
+Set `TYPESAFE_API_KEY` in the command environment.
+The SDK reads this variable and the router does not accept keys as arguments.
+
+Ask the local provider to select one skill:
+
+```sh
+skill-router recommend "debug a Python traceback" --provider local
+```
+
+Ask Jev to choose from the local BM25 shortlist:
+
+```sh
+skill-router recommend "debug a Python traceback" --provider jev --json
+```
+
+The result has one of these statuses: `route`, `no_tool`, or `fallback`.
+Missing keys, missing SDKs, timeouts, and invalid responses use local fallback.
+Jev never loads a skill or grants tool access.
 
 ## Skill format
 
@@ -62,4 +94,3 @@ The router returns guidance only. It does not execute skill scripts or grant too
 
 This repository contains the local routing core.
 Codex hook and MCP adapters will use this core after routing behavior is measured.
-

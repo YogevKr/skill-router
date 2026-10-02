@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 import sys
 
 from .catalog import load_skill, scan_roots
+from .jev import JevProvider, Recommendation, recommend_local
 from .search import search_skills
 
 
@@ -35,6 +37,54 @@ def _skill_json(skill: object) -> dict[str, object]:
     }
 
 
+def _recommendation_json(result: Recommendation) -> dict[str, object]:
+    return {
+        "status": result.status,
+        "provider": result.provider,
+        "skill": _skill_json(result.skill) if result.skill is not None else None,
+        "confidence": result.confidence,
+        "candidates": [
+            {**_skill_json(candidate.skill), "score": round(candidate.score, 6)}
+            for candidate in result.candidates
+        ],
+        "error": result.error,
+        "metrics": asdict(result.metrics) if result.metrics is not None else None,
+    }
+
+
+def _print_recommendation(result: Recommendation, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(_recommendation_json(result), indent=2))
+        return
+    if result.skill is None:
+        suffix = f"\t{result.error}" if result.error else ""
+        print(f"{result.status}{suffix}")
+        return
+    confidence = (
+        f"\tconfidence={result.confidence:.3f}"
+        if result.confidence is not None
+        else ""
+    )
+    suffix = f"\t{result.error}" if result.error else ""
+    print(f"{result.status}\t{result.skill.skill_id}\t{result.provider}{confidence}{suffix}")
+
+
+def _recommend(args: argparse.Namespace, roots: list[Path]) -> int:
+    skills = scan_roots(roots)
+    if args.provider == "jev":
+        result = JevProvider(
+            model=args.model,
+            timeout=args.timeout,
+            shortlist_limit=args.shortlist_limit,
+            confidence_threshold=args.confidence_threshold,
+            fit_threshold=args.fit_threshold,
+        ).recommend(skills, args.query, limit=args.limit)
+    else:
+        result = recommend_local(skills, args.query, limit=args.limit)
+    _print_recommendation(result, as_json=args.json)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Search and load skills from explicit local vaults.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -44,6 +94,20 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--root", action="append", help="skill vault root; repeatable")
     search.add_argument("--limit", type=int, default=3)
     search.add_argument("--json", action="store_true")
+
+    recommend = subparsers.add_parser(
+        "recommend", help="select at most one skill with local search or Jev"
+    )
+    recommend.add_argument("query")
+    recommend.add_argument("--provider", choices=("local", "jev"), default="local")
+    recommend.add_argument("--root", action="append", help="skill vault root; repeatable")
+    recommend.add_argument("--limit", type=int, default=3)
+    recommend.add_argument("--shortlist-limit", type=int, default=8)
+    recommend.add_argument("--model", default="jev-latest")
+    recommend.add_argument("--timeout", type=float, default=5.0)
+    recommend.add_argument("--confidence-threshold", type=float, default=0.30)
+    recommend.add_argument("--fit-threshold", type=float, default=0.30)
+    recommend.add_argument("--json", action="store_true")
 
     load = subparsers.add_parser("load", help="load one skill body")
     load.add_argument("skill_id")
@@ -67,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{result.skill.skill_id}\t{result.score:.3f}\t{result.skill.description}")
         return 0
 
+    if args.command == "recommend":
+        return _recommend(args, roots)
+
     try:
         skill = load_skill(args.skill_id, roots)
     except KeyError as error:
@@ -81,4 +148,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

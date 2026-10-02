@@ -1,14 +1,30 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
 from skill_router.catalog import load_skill, scan_roots
+from skill_router.jev import JevProvider, recommend_local
 from skill_router.search import search_skills
 
 
-class RouterTests(unittest.TestCase):
+class FakeJevClient:
+    def __init__(self, response: object | None = None, error: Exception | None = None) -> None:
+        self.response = response
+        self.error = error
+        self.calls: list[tuple[object, object, dict[str, object]]] = []
+
+    def system_one(self, state: object, questions: object, **kwargs: object) -> object:
+        self.calls.append((state, questions, kwargs))
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
+
+
+class SkillFixture:
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
@@ -25,6 +41,9 @@ class RouterTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+
+
+class RouterTests(SkillFixture, unittest.TestCase):
 
     def test_scans_and_loads_skill(self) -> None:
         skills = scan_roots([self.root])
@@ -46,6 +65,59 @@ class RouterTests(unittest.TestCase):
             load_skill("../python-debug", [self.root])
 
 
+class JevTests(SkillFixture, unittest.TestCase):
+    def test_local_recommendation_routes_one_skill(self) -> None:
+        result = recommend_local(scan_roots([self.root]), "debug a Python traceback")
+        self.assertEqual(result.status, "route")
+        self.assertEqual(result.provider, "local")
+        self.assertEqual(result.skill.skill_id, "python-debug")
+
+    def test_jev_routes_from_metadata_without_skill_body(self) -> None:
+        response = SimpleNamespace(
+            model="jev-test",
+            choices={
+                "which": SimpleNamespace(choice="python-debug", confidence=0.9),
+            },
+            nouls={
+                "fits::python-debug": SimpleNamespace(noul=0.8),
+            },
+            usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+        )
+        client = FakeJevClient(response=response)
+        result = JevProvider(client=client).recommend(
+            scan_roots([self.root]), "debug a Python traceback"
+        )
+        self.assertEqual(result.status, "route")
+        self.assertEqual(result.provider, "jev")
+        self.assertEqual(result.skill.skill_id, "python-debug")
+        state, questions, _ = client.calls[0]
+        self.assertNotIn("body", str(state))
+        self.assertIn("which", questions)
+        self.assertIn("fits::python-debug", questions)
+        self.assertEqual(result.metrics.input_tokens, 12)
+
+    def test_jev_can_abstain(self) -> None:
+        response = SimpleNamespace(
+            model="jev-test",
+            choices={"which": SimpleNamespace(choice="none", confidence=0.9)},
+            nouls={},
+            usage=SimpleNamespace(input_tokens=12, output_tokens=2),
+        )
+        result = JevProvider(client=FakeJevClient(response=response)).recommend(
+            scan_roots([self.root]), "debug a Python traceback"
+        )
+        self.assertEqual(result.status, "no_tool")
+        self.assertIsNone(result.skill)
+
+    def test_jev_failure_falls_back_to_local(self) -> None:
+        result = JevProvider(
+            client=FakeJevClient(error=RuntimeError("offline"))
+        ).recommend(scan_roots([self.root]), "debug a Python traceback")
+        self.assertEqual(result.status, "fallback")
+        self.assertEqual(result.provider, "local")
+        self.assertEqual(result.skill.skill_id, "python-debug")
+        self.assertIn("offline", result.error)
+
+
 if __name__ == "__main__":
     unittest.main()
-
