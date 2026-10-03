@@ -173,6 +173,7 @@ skill-router adopt ripwire --apply
 The first command prints the plan. The second removes only Ripwire symlinks from `~/.agents/skills`,
 creates router-managed links in the configured agent roots, and records the assignments. It never removes
 Ripwire source files. Run `skill-router manage` after adoption to change the four exposure columns.
+If Ripwire runs `skills/install.sh --codex` again, run the adoption command again.
 
 ## Jev recommendations
 
