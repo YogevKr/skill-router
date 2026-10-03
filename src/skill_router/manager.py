@@ -41,15 +41,104 @@ class SyncAction:
     detail: str = ""
 
 
-def default_source_roots() -> list[Path]:
-    """Return the personal skill roots used by the manager."""
+@dataclass(frozen=True)
+class RipwireAdoptionPlan:
+    """A plan to move Ripwire exposure under router control."""
 
+    config: RouterConfig
+    shared_links: tuple[Path, ...]
+
+
+def ripwire_source_root(home: Path | None = None) -> Path:
+    """Return Ripwire's installed skill source root."""
+
+    return (home or Path.home()) / ".local" / "share" / "ripwire" / "skills"
+
+
+def _provider_source_roots(home: Path) -> list[Path]:
+    ripwire = ripwire_source_root(home)
+    return [ripwire] if ripwire.is_dir() else []
+
+
+def _native_source_roots() -> list[Path]:
     home = Path.home()
     return claude_plugin_roots() + [
         home / ".agents" / "skills",
         home / ".codex" / "skills",
         home / ".claude" / "skills",
     ]
+
+
+def default_source_roots() -> list[Path]:
+    """Return the personal and installed provider skill roots."""
+
+    return _provider_source_roots(Path.home()) + _native_source_roots()
+
+
+def plan_ripwire_adoption(
+    config: RouterConfig,
+    skills: Iterable[Skill],
+    *,
+    home: Path | None = None,
+) -> RipwireAdoptionPlan:
+    """Plan ownership of installed Ripwire skills without changing files."""
+
+    home = home or Path.home()
+    source_root = ripwire_source_root(home).resolve()
+    shared_root = home / ".agents" / "skills"
+    assignments = config.assignment_map()
+    shared_links: list[Path] = []
+    for skill in skills:
+        try:
+            skill_source = skill.path.resolve()
+            skill_source.relative_to(source_root)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        shared_link = shared_root / skill.skill_id
+        if shared_link.is_symlink() and shared_link.resolve() == skill_source.parent:
+            shared_links.append(shared_link)
+        current = assignments.get(skill.skill_id)
+        if current is None:
+            exposed = frozenset({"codex", "claude"}) if shared_link in shared_links else frozenset()
+            assignments[skill.skill_id] = SkillAssignment(
+                skill_id=skill.skill_id,
+                source=skill.path,
+                targets=exposed,
+                enabled=bool(exposed),
+                native_targets=exposed,
+            )
+        else:
+            assignments[skill.skill_id] = replace(current, source=skill.path)
+    updated = replace(
+        config,
+        target_roots=tuple(sorted(config.roots().items())),
+        assignments=tuple(
+            sorted(assignments.values(), key=lambda item: item.skill_id.casefold())
+        ),
+    )
+    return RipwireAdoptionPlan(updated, tuple(sorted(shared_links)))
+
+
+def apply_ripwire_adoption(plan: RipwireAdoptionPlan) -> tuple[RouterConfig, list[SyncAction]]:
+    """Remove shared Ripwire links and create router-managed links."""
+
+    planned = sync_assignments(plan.config, prune=True)
+    conflicts = [
+        action
+        for action in planned
+        if action.skill_id.startswith("ripwire-")
+        and action.action in {"conflict", "invalid-source", "invalid-target"}
+    ]
+    if conflicts:
+        details = "; ".join(
+            f"{action.target}/{action.skill_id}: {action.detail or action.action}"
+            for action in conflicts
+        )
+        raise ValueError(f"cannot adopt Ripwire safely: {details}")
+    for path in plan.shared_links:
+        path.unlink()
+    actions = sync_assignments(plan.config, apply=True, prune=True)
+    return config_after_sync(plan.config, actions), actions
 
 
 def assignment_config(

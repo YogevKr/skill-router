@@ -19,7 +19,14 @@ from skill_router.config import (
     save_config,
 )
 from skill_router.jev import JevProvider, recommend_local
-from skill_router.manager import _run_curses_menu, config_after_sync, run_menu, sync_assignments
+from skill_router.manager import (
+    _run_curses_menu,
+    apply_ripwire_adoption,
+    config_after_sync,
+    plan_ripwire_adoption,
+    run_menu,
+    sync_assignments,
+)
 from skill_router.search import search_skills
 from skill_router.state import claude_plugin_roots, claude_skill_overrides, inspect_skills
 
@@ -398,6 +405,38 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
 
 class StateManagerTests(SkillFixture, unittest.TestCase):
+    def test_ripwire_adoption_moves_shared_links_to_managed_targets(self) -> None:
+        home = self.root / "home"
+        source_root = home / ".local" / "share" / "ripwire" / "skills"
+        source = source_root / "ripwire-orient"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text(
+            "---\nname: ripwire-orient\ndescription: Orient a repository.\n---\n\nUse the map.\n",
+            encoding="utf-8",
+        )
+        shared_root = home / ".agents" / "skills"
+        shared_root.mkdir(parents=True)
+        shared_link = shared_root / "ripwire-orient"
+        shared_link.symlink_to(source, target_is_directory=True)
+        config = RouterConfig(
+            target_roots=(
+                ("codex", home / ".codex" / "skills"),
+                ("claude", home / ".claude" / "skills"),
+            )
+        )
+        skill = scan_roots([source_root])[0]
+
+        plan = plan_ripwire_adoption(config, [skill], home=home)
+        self.assertEqual(plan.shared_links, (shared_link,))
+        self.assertEqual(plan.config.assignment_map()["ripwire-orient"].targets, frozenset({"codex", "claude"}))
+
+        saved, actions = apply_ripwire_adoption(plan)
+        self.assertFalse(shared_link.exists() or shared_link.is_symlink())
+        self.assertTrue((home / ".codex" / "skills" / "ripwire-orient").is_symlink())
+        self.assertTrue((home / ".claude" / "skills" / "ripwire-orient").is_symlink())
+        self.assertEqual([action.action for action in actions], ["link", "link"])
+        self.assertEqual(len(saved.managed_links), 2)
+
     def test_status_reads_frontmatter_mode(self) -> None:
         skill_path = self.root / "python-debug" / "SKILL.md"
         skill_path.write_text(

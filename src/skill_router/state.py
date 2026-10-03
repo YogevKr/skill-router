@@ -97,6 +97,8 @@ def claude_skill_overrides(*, home: Path | None = None, cwd: Path | None = None)
 
 def _source_label(path: Path) -> str:
     parts = path.parts
+    if "ripwire" in parts and ".local" in parts:
+        return "ripwire"
     if "plugins" in parts and (".claude" in parts or "claude" in parts):
         return "plugin"
     if "synced" in parts and ".claude" in parts:
@@ -156,6 +158,16 @@ def _exposure(
 ) -> str:
     if _under(skill.path, target_root) or any(_direct_skill(skill.path, root) for root in native_roots):
         return "native"
+    source_dir = skill.path.parent.resolve()
+    for root in native_roots:
+        destination = root / skill.skill_id
+        if not destination.is_symlink():
+            continue
+        try:
+            if destination.resolve() == source_dir:
+                return "native"
+        except (FileNotFoundError, OSError):
+            continue
     destination = target_root / skill.skill_id
     if destination.is_symlink():
         key = (target_root.as_posix(), skill.skill_id)
@@ -175,7 +187,7 @@ def inspect_skills(
     roots = config.roots()
     overrides = claude_skill_overrides(home=home, cwd=cwd)
     home = home or Path.home()
-    claude_native_roots = (home / ".agents" / "skills",)
+    shared_native_roots = (home / ".agents" / "skills",)
     assignments = config.assignment_map()
     managed = {(roots[link.target].as_posix(), link.skill_id) for link in config.managed_links}
     result: list[SkillState] = []
@@ -186,7 +198,7 @@ def inspect_skills(
         claude_exposure = (
             "native"
             if source == "plugin"
-            else _exposure(skill, roots["claude"], managed, claude_native_roots)
+            else _exposure(skill, roots["claude"], managed, shared_native_roots)
         )
         override = overrides.get(skill.skill_id) or overrides.get(f"anthropic-skills:{skill.skill_id}")
         frontmatter_mode = _frontmatter_mode(skill.path)
@@ -208,7 +220,7 @@ def inspect_skills(
                 skill=skill,
                 source=source,
                 router_targets=targets,
-                codex_exposure=_exposure(skill, roots["codex"], managed),
+                codex_exposure=_exposure(skill, roots["codex"], managed, shared_native_roots),
                 claude_exposure=claude_exposure,
                 claude_mode=claude_mode,
                 claude_override=override,

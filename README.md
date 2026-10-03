@@ -160,6 +160,20 @@ Use `--prune --apply` to remove only symlinks that this tool recorded and that s
 It never removes direct native folders or their source files.
 The default mode makes no filesystem changes.
 
+## Adopt Ripwire skills
+
+Ripwire installs its skills in `~/.local/share/ripwire/skills` and exposes them with symlinks in
+`~/.agents/skills`. Adopt those links so the router controls exposure in Codex and Claude:
+
+```sh
+skill-router adopt ripwire
+skill-router adopt ripwire --apply
+```
+
+The first command prints the plan. The second removes only Ripwire symlinks from `~/.agents/skills`,
+creates router-managed links in the configured agent roots, and records the assignments. It never removes
+Ripwire source files. Run `skill-router manage` after adoption to change the four exposure columns.
+
 ## Jev recommendations
 
 Install the optional provider:

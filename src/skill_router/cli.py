@@ -20,8 +20,11 @@ from .config import (
 )
 from .jev import JevProvider, Recommendation, recommend_local
 from .manager import (
+    apply_ripwire_adoption,
     config_after_sync,
     default_source_roots,
+    plan_ripwire_adoption,
+    ripwire_source_root,
     run_menu,
     sync_assignments,
 )
@@ -36,7 +39,11 @@ def default_roots(cwd: Path | None = None) -> list[Path]:
     if configured:
         return [Path(value).expanduser() for value in configured.split(os.pathsep) if value]
     base = cwd or Path.cwd()
-    return [Path.home() / ".agents" / "skill-vault", base / ".agents" / "skill-vault"]
+    roots = [Path.home() / ".agents" / "skill-vault", base / ".agents" / "skill-vault"]
+    ripwire = ripwire_source_root()
+    if ripwire.is_dir():
+        roots.insert(0, ripwire)
+    return roots
 
 
 def _roots(values: list[str] | None) -> list[Path]:
@@ -310,6 +317,46 @@ def _sync_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _adopt_command(args: argparse.Namespace) -> int:
+    if args.provider != "ripwire":
+        print(f"unsupported provider: {args.provider}", file=sys.stderr)
+        return 2
+    source_root = ripwire_source_root()
+    if not source_root.is_dir():
+        print(f"Ripwire skill root not found: {source_root}", file=sys.stderr)
+        return 2
+    try:
+        current = load_config()
+        skills = scan_roots([source_root])
+        plan = plan_ripwire_adoption(current, skills)
+        planned = sync_assignments(plan.config, prune=True)
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print("provider\tripwire")
+    print(f"skills\t{len(skills)}")
+    print(f"shared-links\t{len(plan.shared_links)}")
+    for path in plan.shared_links:
+        print(f"unlink\tshared\t{path.name}\t{path}")
+    for action in planned:
+        if not action.skill_id.startswith("ripwire-"):
+            continue
+        detail = f"\t{action.detail}" if action.detail else ""
+        print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
+    if not args.apply:
+        print("dry-run\tuse --apply to adopt")
+        return 0
+    try:
+        saved, actions = apply_ripwire_adoption(plan)
+        path = save_config(saved)
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"saved\t{path}")
+    print(f"applied\t{len(actions)} sync actions")
+    return 0
+
+
 def _search_command(args: argparse.Namespace, roots: list[Path]) -> int:
     results = search_skills(scan_roots(roots), args.query, limit=args.limit)
     if args.json:
@@ -347,6 +394,8 @@ def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
         return _status_command(args)
     if args.command == "sync":
         return _sync_command(args)
+    if args.command == "adopt":
+        return _adopt_command(args)
     return None
 
 
@@ -406,6 +455,10 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--apply", action="store_true", help="create safe links")
     sync.add_argument("--prune", action="store_true", help="remove only managed links")
     sync.add_argument("--json", action="store_true")
+
+    adopt = subparsers.add_parser("adopt", help="take ownership of external skill links")
+    adopt.add_argument("provider", choices=("ripwire",))
+    adopt.add_argument("--apply", action="store_true", help="remove shared links and create managed links")
 
     load = subparsers.add_parser("load", help="load one skill body")
     load.add_argument("skill_id")

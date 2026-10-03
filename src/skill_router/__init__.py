@@ -13,10 +13,14 @@ from .config import (
 )
 from .jev import JevMetrics, JevProvider, Recommendation, recommend_local
 from .manager import (
+    RipwireAdoptionPlan,
     SyncAction,
+    apply_ripwire_adoption,
     assignment_config,
     config_after_sync,
     default_source_roots,
+    plan_ripwire_adoption,
+    ripwire_source_root,
     run_menu,
     sync_assignments,
 )
@@ -32,6 +36,8 @@ __all__ = [
     "SkillAssignment",
     "effective_native_targets",
     "SyncAction",
+    "RipwireAdoptionPlan",
+    "apply_ripwire_adoption",
     "assignment_config",
     "SearchResult",
     "Skill",
@@ -39,6 +45,8 @@ __all__ = [
     "config_path",
     "config_after_sync",
     "default_source_roots",
+    "plan_ripwire_adoption",
+    "ripwire_source_root",
     "load_config",
     "recommend_local",
     "run_menu",
