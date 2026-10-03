@@ -82,6 +82,8 @@ skill-router manage
 ```
 
 The selector shows one skill per row.
+By default, it shows router and provider sources.
+Use `--all` to include plugin, sync, native, and bundled sources.
 In a terminal, use Up and Down to move between skills.
 Use Left and Right to move between the four columns.
 The active header starts with `>` and the active cell uses reverse color.

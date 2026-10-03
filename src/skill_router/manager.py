@@ -94,13 +94,24 @@ def _native_source_roots() -> list[Path]:
 
 
 def default_source_roots() -> list[Path]:
-    """Return the personal and installed provider skill roots."""
+    """Return all personal, provider, native, and installed skill roots."""
 
     router = router_source_root(Path.home())
     roots = _provider_source_roots(Path.home())
     if router.is_dir():
         roots.append(router)
     return roots + _native_source_roots()
+
+
+def selector_source_roots() -> list[Path]:
+    """Return router and provider roots for the default selector view."""
+
+    home = Path.home()
+    roots = _provider_source_roots(home)
+    router = router_source_root(home)
+    if router.is_dir():
+        roots.append(router)
+    return roots
 
 
 def _same_directory(left: Path, right: Path) -> bool:

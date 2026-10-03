@@ -29,6 +29,7 @@ from .manager import (
     plan_ripwire_adoption,
     ripwire_source_root,
     run_menu,
+    selector_source_roots,
     sync_assignments,
     SyncAction,
     native_skill,
@@ -186,7 +187,12 @@ def _manage_command(args: argparse.Namespace) -> int:
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
-    roots = [Path(value).expanduser() for value in args.root] if args.root else default_source_roots()
+    if args.root:
+        roots = [Path(value).expanduser() for value in args.root]
+    elif args.all:
+        roots = default_source_roots()
+    else:
+        roots = selector_source_roots()
     skills = scan_roots(roots)
     saved = run_menu(skills, current, target=args.target, search=args.search)
     if saved is None:
@@ -540,6 +546,11 @@ def build_parser() -> argparse.ArgumentParser:
     manage.add_argument("--root", action="append", help="skill root; repeatable")
     manage.add_argument("--target", choices=("codex", "claude"), default="codex")
     manage.add_argument("--search", default="", help="initial skill filter")
+    manage.add_argument(
+        "--all",
+        action="store_true",
+        help="include plugin, sync, native, and bundled sources",
+    )
 
     assignments = subparsers.add_parser("assignments", help="show saved skill assignments")
     assignments.add_argument("--json", action="store_true")
