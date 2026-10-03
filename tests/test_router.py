@@ -269,6 +269,30 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(assignment.targets, frozenset({"codex"}))
         self.assertEqual(assignment.native_targets, frozenset({"codex", "claude"}))
 
+    def test_manage_syncs_links_when_saved(self) -> None:
+        target = self.root / "codex"
+        config = RouterConfig(
+            target_roots=(("codex", target),),
+            assignments=(
+                SkillAssignment(
+                    "python-debug",
+                    self.root / "python-debug" / "SKILL.md",
+                    frozenset({"codex"}),
+                    native_targets=frozenset({"codex"}),
+                ),
+            ),
+        )
+        config_file = self.root / "config.toml"
+        with patch.dict("os.environ", {"SKILL_ROUTER_CONFIG": str(config_file)}), patch(
+            "skill_router.cli.run_menu", return_value=config
+        ), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["manage", "--root", str(self.root)]), 0)
+
+        link = target / "python-debug"
+        self.assertTrue(link.is_symlink())
+        saved = load_config(config_file)
+        self.assertEqual([(link.target, link.skill_id) for link in saved.managed_links], [("codex", "python-debug")])
+
     def test_menu_imports_legacy_native_state(self) -> None:
         native_root = self.root / "codex"
         skill_dir = native_root / "native-skill"

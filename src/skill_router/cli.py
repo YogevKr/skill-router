@@ -180,8 +180,20 @@ def _manage_command(args: argparse.Namespace) -> int:
     if saved is None:
         print("not saved")
         return 0
-    path = save_config(saved)
+    try:
+        actions = sync_assignments(saved, apply=True, prune=True)
+        saved = config_after_sync(saved, actions)
+        path = save_config(saved)
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"saved\t{path}")
+    print(f"synced\t{len(actions)} actions")
+    for action in actions:
+        if action.action == "keep":
+            continue
+        detail = f"\t{action.detail}" if action.detail else ""
+        print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
     return 0
 
 

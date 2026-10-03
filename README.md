@@ -101,8 +101,8 @@ The four columns store separate selections:
 | `codex native` | Sync may expose this skill in Codex's native skill root. |
 | `claude native` | Sync may expose this skill in Claude's native skill root. |
 
-The title shows the active cell group.
-For example, `edit native target codex` means Space changes `codex native`.
+The active column header shows the current cell group.
+For example, uppercase `NATIVE CODEX` means Space changes `codex native`.
 
 Use `--root` to choose other source roots.
 Use `--target` to choose the first target.
@@ -127,7 +127,9 @@ The native columns show direct exposure.
 The JSON view also includes Claude modes, locks, sources, and paths.
 
 Assignments persist in `~/.config/skill-router/config.toml`.
-The manager does not change skill directories when it saves.
+Enter or `s` saves assignments and runs a safe sync.
+The sync creates missing links and prunes only managed links.
+The manager never removes direct native or plugin folders.
 
 Set target roots when you need a non-default location:
 
@@ -139,13 +141,13 @@ skill-router config target set claude ~/.claude/skills
 
 ## Sync selected skills
 
-Review a sync plan before you apply it:
+Review a sync plan without changing files:
 
 ```sh
 skill-router sync
 ```
 
-Create missing symlinks with an explicit apply flag:
+Apply selected links outside the manager:
 
 ```sh
 skill-router sync --apply

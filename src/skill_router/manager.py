@@ -185,10 +185,10 @@ def _render_menu(
         output_fn(prefix + "— " + description)
     output_fn(
         "Commands: number(s) toggle | m router/native | t target | a all | n none | "
-        "f text | s save | q quit"
+        "f text | s save+sync | q quit"
     )
     output_fn(
-        "Native off removes only router links during sync --prune; direct and plugin folders stay."
+        "Save+sync removes only managed links; direct and plugin folders stay."
     )
 
 
@@ -271,7 +271,7 @@ def _run_curses_menu(
             0,
             0,
             "Up/Down row | Left/Right column | Space toggle | a all | n none | "
-            "Enter save | / filter | q quit",
+            "Enter save+sync | / filter | q quit",
             max(1, width - 1),
             curses.A_DIM,
         )
@@ -409,7 +409,7 @@ def _run_line_menu(
 
     Commands are numbers to toggle, ``m`` to switch router or native,
     ``a`` to select all, ``n`` to clear all, ``t codex`` or ``t claude`` to
-    change target, ``f text`` to filter, ``s`` to save, and ``q`` to quit.
+    change target, ``f text`` to filter, ``s`` to save and sync, and ``q`` to quit.
     """
 
     if target not in TARGETS:
