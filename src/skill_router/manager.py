@@ -230,6 +230,86 @@ def _toggle_numbers(
             targets.add(active_target)
 
 
+def _read_curses_key(screen: object, curses: object) -> int:
+    key = screen.getch()
+    if key != 27:
+        return key
+    screen.timeout(50)
+    try:
+        if screen.getch() != ord("["):
+            return 27
+        code = screen.getch()
+        return {
+            ord("A"): curses.KEY_UP,
+            ord("B"): curses.KEY_DOWN,
+            ord("C"): curses.KEY_RIGHT,
+            ord("D"): curses.KEY_LEFT,
+        }.get(code, 27)
+    finally:
+        screen.timeout(-1)
+
+
+def _review_body_lines(skill: Skill, width: int) -> list[str]:
+    lines: list[str] = []
+    for source_line in skill.body.splitlines() or [""]:
+        lines.extend(
+            textwrap.wrap(
+                source_line,
+                width=width,
+                replace_whitespace=False,
+                drop_whitespace=False,
+            )
+            or [""]
+        )
+    return lines
+
+
+def _review_curses_skill(screen: object, skill: Skill, curses: object) -> None:
+    offset = 0
+    while True:
+        height, width = screen.getmaxyx()
+        line_width = max(1, width - 1)
+        body_lines = _review_body_lines(skill, line_width)
+        row_limit = max(1, height - 3)
+        max_offset = max(0, len(body_lines) - row_limit)
+        offset = min(offset, max_offset)
+        screen.erase()
+        screen.addnstr(
+            0,
+            0,
+            f"Review: {skill.skill_id} | Enter/Esc back | Up/Down scroll | q back",
+            line_width,
+            curses.A_BOLD,
+        )
+        screen.addnstr(1, 0, f"Source: {skill.path}", line_width, curses.A_DIM)
+        for row, line in enumerate(body_lines[offset : offset + row_limit], start=2):
+            screen.addnstr(row, 0, line, line_width)
+        end = min(len(body_lines), offset + row_limit)
+        screen.addnstr(
+            height - 1,
+            0,
+            f"Lines {offset + 1}-{end} of {len(body_lines)}",
+            line_width,
+            curses.A_DIM,
+        )
+        screen.refresh()
+        key = _read_curses_key(screen, curses)
+        if key in (10, 13, curses.KEY_ENTER, 27, ord("q"), ord("Q")):
+            return
+        if key == curses.KEY_UP:
+            offset = max(0, offset - 1)
+        elif key == curses.KEY_DOWN:
+            offset = min(max_offset, offset + 1)
+        elif key == curses.KEY_PPAGE:
+            offset = max(0, offset - row_limit)
+        elif key == curses.KEY_NPAGE:
+            offset = min(max_offset, offset + row_limit)
+        elif key == curses.KEY_HOME:
+            offset = 0
+        elif key == curses.KEY_END:
+            offset = max_offset
+
+
 def _run_curses_menu(
     skills: list[Skill],
     config: RouterConfig,
@@ -271,7 +351,7 @@ def _run_curses_menu(
             0,
             0,
             "Up/Down row | Left/Right column | Space toggle | a all | n none | "
-            "Enter save+sync | / filter | q quit",
+            "Enter review | s save+sync | / filter | q quit",
             max(1, width - 1),
             curses.A_DIM,
         )
@@ -330,24 +410,6 @@ def _run_curses_menu(
     def loop(screen: object) -> RouterConfig | None:
         nonlocal active_column, cursor, filter_text
 
-        def read_key() -> int:
-            key = screen.getch()
-            if key != 27:
-                return key
-            screen.timeout(50)
-            try:
-                if screen.getch() != ord("["):
-                    return 27
-                code = screen.getch()
-                return {
-                    ord("A"): curses.KEY_UP,
-                    ord("B"): curses.KEY_DOWN,
-                    ord("C"): curses.KEY_RIGHT,
-                    ord("D"): curses.KEY_LEFT,
-                }.get(code, 27)
-            finally:
-                screen.timeout(-1)
-
         try:
             curses.curs_set(0)
         except curses.error:
@@ -355,7 +417,7 @@ def _run_curses_menu(
         screen.keypad(True)
         while True:
             visible = draw(screen)
-            key = read_key()
+            key = _read_curses_key(screen, curses)
             if key == curses.KEY_UP:
                 cursor = max(0, cursor - 1)
             elif key == curses.KEY_DOWN:
@@ -388,7 +450,9 @@ def _run_curses_menu(
             elif key == ord("/"):
                 filter_text = prompt_filter(screen)
                 cursor = 0
-            elif key in (10, 13, curses.KEY_ENTER):
+            elif key in (10, 13, curses.KEY_ENTER) and visible:
+                _review_curses_skill(screen, visible[cursor], curses)
+            elif key == ord("s"):
                 return assignment_config(config, by_id.values(), router_selected, native_selected)
             elif key in (ord("q"), ord("Q"), 3, 27):
                 return None

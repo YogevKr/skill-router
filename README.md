@@ -84,7 +84,9 @@ The menu shows one skill per row.
 In a terminal, use Up and Down to move between skills.
 Use Left and Right to move between the four columns.
 The active column header uses uppercase text and reverse color.
-Press Space to toggle the active column, Enter to save, and `q` to quit.
+Press Space to toggle the active column.
+Press Enter to review the selected skill, `s` to save and sync, and `q` to quit.
+Review mode supports Up, Down, Page Up, Page Down, Home, and End.
 Press `a` to select all shown rows in the active column.
 Press `n` to clear all shown rows in the active column.
 Press `/` to filter the list.

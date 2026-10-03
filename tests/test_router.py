@@ -430,6 +430,7 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         class FakeScreen:
             def __init__(self, width: int = 120) -> None:
                 self.width = width
+                self.keys = iter([10, 10, ord("s")])
                 self.lines: list[tuple[int, str]] = []
 
             def getmaxyx(self) -> tuple[int, int]:
@@ -457,7 +458,7 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
                 pass
 
             def getch(self) -> int:
-                return 10
+                return next(self.keys)
 
             def attron(self, _attribute: object) -> None:
                 pass
@@ -484,7 +485,13 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
             def curs_set(_value: int) -> None:
                 pass
 
-        skill = Skill("demo", "demo", "A demo skill.", self.root / "demo" / "SKILL.md", "")
+        skill = Skill(
+            "demo",
+            "demo",
+            "A demo skill.",
+            self.root / "demo" / "SKILL.md",
+            "Full skill instructions.\nSecond line.",
+        )
 
         def render(width: int) -> FakeScreen:
             screen = FakeScreen(width)
@@ -501,12 +508,13 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         self.assertIn("ROUTER CODEX", header)
         self.assertIn("description", header)
         self.assertTrue(skill_row.startswith("  1. demo"))
+        self.assertIn("Full skill instructions.", [value for _, value in screen.lines])
         self.assertTrue(render(40).lines)
 
     def test_curses_arrows_select_columns(self) -> None:
         class FakeScreen:
             def __init__(self) -> None:
-                self.keys = iter([261, 32, 10])
+                self.keys = iter([261, 32, 10, 10, ord("s")])
 
             def getmaxyx(self) -> tuple[int, int]:
                 return (10, 120)
