@@ -21,6 +21,14 @@ from .config import (
 from .state import SkillState, claude_plugin_roots, inspect_skills
 
 
+COLUMN_TARGETS: tuple[tuple[str, str], ...] = (
+    ("router", "claude"),
+    ("router", "codex"),
+    ("native", "codex"),
+    ("native", "claude"),
+)
+
+
 @dataclass(frozen=True)
 class SyncAction:
     """One planned or applied target change."""
@@ -138,6 +146,11 @@ def _layer_selection(
     return native_selected if layer == "native" else router_selected
 
 
+def _column_label(column: int) -> str:
+    layer, target = COLUMN_TARGETS[column]
+    return f"{layer} {target}"
+
+
 def _router_mark(skill_id: str, selected: dict[str, set[str]], target: str) -> str:
     return "yes" if target in selected.get(skill_id, set()) else "no"
 
@@ -237,8 +250,7 @@ def _run_curses_menu(
     states = _menu_states(skills, config)
     router_selected = _menu_selection(config)
     native_selected = _native_selection(config, states)
-    active_layer = "router"
-    active_target = target
+    active_column = 1 if target == "codex" else 0
     filter_text = search.casefold().strip()
     cursor = 0
 
@@ -263,14 +275,15 @@ def _run_curses_menu(
         screen.addnstr(
             0,
             0,
-            f"Skill manager: edit {active_layer} target {active_target} ({len(visible)} shown)",
+            f"Skill manager: edit {_column_label(active_column)} ({len(visible)} shown)",
             max(1, width - 1),
             curses.A_BOLD,
         )
         screen.addnstr(
             1,
             0,
-            "Up/Down move | Space toggle | m router/native | t target | Enter save | / filter | q quit",
+            "Up/Down row | Left/Right column | Space toggle | a all | n none | "
+            "Enter save | / filter | q quit",
             max(1, width - 1),
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
@@ -301,13 +314,13 @@ def _run_curses_menu(
                 screen.attroff(curses.A_REVERSE)
         if not visible:
             screen.addnstr(2, 0, "No matching skills.", max(1, width - 1))
-        status = f"Edit: {active_layer} {active_target} | Filter: {filter_text or '-'}"
+        status = f"Edit: {_column_label(active_column)} | Filter: {filter_text or '-'}"
         screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
         screen.refresh()
         return visible
 
     def loop(screen: object) -> RouterConfig | None:
-        nonlocal active_layer, active_target, cursor, filter_text
+        nonlocal active_column, cursor, filter_text
 
         def read_key() -> int:
             key = screen.getch()
@@ -335,9 +348,9 @@ def _run_curses_menu(
         while True:
             visible = draw(screen)
             key = read_key()
-            if key in (curses.KEY_UP, ord("k")):
+            if key == curses.KEY_UP:
                 cursor = max(0, cursor - 1)
-            elif key in (curses.KEY_DOWN, ord("j")):
+            elif key == curses.KEY_DOWN:
                 cursor = min(max(0, len(visible) - 1), cursor + 1)
             elif key == curses.KEY_PPAGE:
                 cursor = max(0, cursor - max(1, screen.getmaxyx()[0] - 3))
@@ -347,8 +360,13 @@ def _run_curses_menu(
                 cursor = 0
             elif key == curses.KEY_END:
                 cursor = max(0, len(visible) - 1)
+            elif key == curses.KEY_LEFT:
+                active_column = max(0, active_column - 1)
+            elif key == curses.KEY_RIGHT:
+                active_column = min(len(COLUMN_TARGETS) - 1, active_column + 1)
             elif key == ord(" ") and visible:
                 skill_id = visible[cursor].skill_id
+                active_layer, active_target = COLUMN_TARGETS[active_column]
                 selected = _layer_selection(router_selected, native_selected, active_layer)
                 targets = selected.setdefault(skill_id, set())
                 if active_target in targets:
@@ -356,12 +374,9 @@ def _run_curses_menu(
                 else:
                     targets.add(active_target)
             elif key in (ord("a"), ord("n")):
+                active_layer, active_target = COLUMN_TARGETS[active_column]
                 selected = _layer_selection(router_selected, native_selected, active_layer)
                 _set_visible(visible, selected, active_target, enabled=key == ord("a"))
-            elif key == ord("m"):
-                active_layer = "native" if active_layer == "router" else "router"
-            elif key == ord("t"):
-                active_target = "claude" if active_target == "codex" else "codex"
             elif key == ord("/"):
                 filter_text = prompt_filter(screen)
                 cursor = 0

@@ -438,6 +438,8 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
             KEY_NPAGE = 338
             KEY_HOME = 262
             KEY_END = 360
+            KEY_LEFT = 260
+            KEY_RIGHT = 261
             KEY_ENTER = 343
             A_BOLD = 1
             A_DIM = 2
@@ -467,6 +469,58 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         self.assertIn("router claude", header)
         self.assertIn("description", header)
         self.assertTrue(skill_row.startswith("  1. demo"))
+
+    def test_curses_arrows_select_columns(self) -> None:
+        class FakeScreen:
+            def __init__(self) -> None:
+                self.keys = iter([261, 32, 10])
+
+            def getmaxyx(self) -> tuple[int, int]:
+                return (10, 120)
+
+            def erase(self) -> None:
+                pass
+
+            def addnstr(self, *_args: object) -> None:
+                pass
+
+            def refresh(self) -> None:
+                pass
+
+            def keypad(self, _enabled: bool) -> None:
+                pass
+
+            def getch(self) -> int:
+                return next(self.keys)
+
+            def attron(self, _attribute: object) -> None:
+                pass
+
+            def attroff(self, _attribute: object) -> None:
+                pass
+
+        class FakeCurses:
+            KEY_UP = 259
+            KEY_DOWN = 258
+            KEY_PPAGE = 339
+            KEY_NPAGE = 338
+            KEY_HOME = 262
+            KEY_END = 360
+            KEY_LEFT = 260
+            KEY_RIGHT = 261
+            KEY_ENTER = 343
+            A_BOLD = 1
+            A_DIM = 2
+            A_REVERSE = 3
+            error = RuntimeError
+            wrapper = staticmethod(lambda function: function(FakeScreen()))
+            curs_set = staticmethod(lambda _value: None)
+
+        skill = Skill("demo", "demo", "A demo skill.", self.root / "demo" / "SKILL.md", "")
+        with patch.dict("sys.modules", {"curses": FakeCurses}):
+            updated = _run_curses_menu([skill], RouterConfig(), target="codex", search="")
+
+        self.assertEqual(updated.assignment_map()["demo"].native_targets, frozenset({"codex"}))
 
     def test_description_width(self) -> None:
         skill = Skill("long", "long", "word " * 100, self.root / "long" / "SKILL.md", "")

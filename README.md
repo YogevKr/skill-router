@@ -81,14 +81,15 @@ skill-router manage
 ```
 
 The menu shows one skill per row.
-In a terminal, use Up and Down to move.
+In a terminal, use Up and Down to move between skills.
+Use Left and Right to move between the four columns.
 Press Space to toggle the active column, Enter to save, and `q` to quit.
-Press `m` to switch between router and native columns.
-Press `t` to switch between Claude and Codex.
 Press `a` to select all shown rows in the active column.
 Press `n` to clear all shown rows in the active column.
 Press `/` to filter the list.
-When input is not interactive, the menu accepts number and text commands.
+When input is not interactive, use `m` to switch router or native.
+Use `t codex` or `t claude` to choose the target.
+The line menu also accepts number and text commands.
 
 The four columns store separate selections:
 
