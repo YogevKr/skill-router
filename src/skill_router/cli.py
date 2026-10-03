@@ -20,6 +20,7 @@ from .config import (
 )
 from .jev import JevProvider, Recommendation, recommend_local
 from .manager import (
+    NativeAdoptionPlan,
     apply_native_adoption,
     apply_ripwire_adoption,
     config_after_sync,
@@ -261,14 +262,19 @@ def _status_command(args: argparse.Namespace) -> int:
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
-    roots = (
-        [Path(value).expanduser() for value in args.root]
-        if args.root
-        else default_source_roots() + claude_plugin_roots()
-    )
-    rows = inspect_skills(scan_roots(roots), current)
+    values = _status_values(current, args)
+    if args.json:
+        print(json.dumps(values, indent=2))
+        return 0
+    return _print_status_rows(values)
+
+
+def _status_values(current: RouterConfig, args: argparse.Namespace) -> list[dict[str, object]]:
+    """Build status rows from configured and discovered skills."""
+
+    roots = _status_roots(args)
     assignments = current.assignment_map()
-    values = [
+    return [
         {
             "id": row.skill.skill_id,
             "source": row.source,
@@ -283,12 +289,16 @@ def _status_command(args: argparse.Namespace) -> int:
             "claude_lock": row.claude_lock,
             "path": str(row.skill.path),
         }
-        for row in rows
+        for row in inspect_skills(scan_roots(roots), current)
     ]
-    if args.json:
-        print(json.dumps(values, indent=2))
-        return 0
-    return _print_status_rows(values)
+
+
+def _status_roots(args: argparse.Namespace) -> list[Path]:
+    """Return explicit status roots, or the managed roots plus plugins."""
+
+    if args.root:
+        return [Path(value).expanduser() for value in args.root]
+    return default_source_roots() + claude_plugin_roots()
 
 
 def _sync_command(args: argparse.Namespace) -> int:
@@ -367,45 +377,11 @@ def _adopt_native_command(args: argparse.Namespace) -> int:
         return 2
     try:
         current = load_config()
-        skill = native_skill(args.skill_id, current)
-        if skill is None:
-            skills = scan_roots(default_source_roots())
-            skill = next(
-                (value for value in skills if value.skill_id.casefold() == args.skill_id.casefold()),
-                None,
-            )
-        if skill is None:
-            print(f"skill not found: {args.skill_id}", file=sys.stderr)
-            return 2
-        plan = plan_native_adoption(current, skill)
-        if (plan.router_dir / "SKILL.md").is_file():
-            planned = sync_assignments(plan.config, prune=True)
-        else:
-            targets = plan.config.assignment_map()[plan.skill_id].targets
-            planned = [
-                SyncAction(
-                    "link",
-                    target,
-                    plan.skill_id,
-                    plan.config.roots()[target] / plan.skill_id,
-                    plan.router_dir / "SKILL.md",
-                )
-                for target in sorted(targets)
-            ]
+        plan, planned = _native_adoption_plan(current, args.skill_id)
     except (ConfigError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    print("provider\tnative")
-    print(f"skill\t{plan.skill_id}")
-    print(f"source\t{plan.source_dir}")
-    print(f"router-source\t{plan.router_dir}")
-    for path in plan.shared_paths:
-        print(f"remove\tshared\t{path}")
-    for action in planned:
-        if action.skill_id != plan.skill_id:
-            continue
-        detail = f"\t{action.detail}" if action.detail else ""
-        print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
+    _print_native_adoption_plan(plan, planned)
     if not args.apply:
         print("dry-run\tuse --apply to adopt")
         return 0
@@ -418,6 +394,57 @@ def _adopt_native_command(args: argparse.Namespace) -> int:
     print(f"saved\t{path}")
     print(f"applied\t{len(actions)} sync actions")
     return 0
+
+
+def _native_adoption_plan(
+    current: RouterConfig,
+    skill_id: str,
+) -> tuple[NativeAdoptionPlan, list[SyncAction]]:
+    """Build one native adoption plan and its sync preview."""
+
+    skill = native_skill(skill_id, current)
+    if skill is None:
+        skill = next(
+            (
+                value
+                for value in scan_roots(default_source_roots())
+                if value.skill_id.casefold() == skill_id.casefold()
+            ),
+            None,
+        )
+    if skill is None:
+        raise ValueError(f"skill not found: {skill_id}")
+    plan = plan_native_adoption(current, skill)
+    if (plan.router_dir / "SKILL.md").is_file():
+        return plan, sync_assignments(plan.config, prune=True)
+    targets = plan.config.assignment_map()[plan.skill_id].targets
+    actions = [
+        SyncAction(
+            "link",
+            target,
+            plan.skill_id,
+            plan.config.roots()[target] / plan.skill_id,
+            plan.router_dir / "SKILL.md",
+        )
+        for target in sorted(targets)
+    ]
+    return plan, actions
+
+
+def _print_native_adoption_plan(plan: NativeAdoptionPlan, actions: list[SyncAction]) -> None:
+    """Print a native adoption plan."""
+
+    print("provider\tnative")
+    print(f"skill\t{plan.skill_id}")
+    print(f"source\t{plan.source_dir}")
+    print(f"router-source\t{plan.router_dir}")
+    for path in plan.shared_paths:
+        print(f"remove\tshared\t{path}")
+    for action in actions:
+        if action.skill_id != plan.skill_id:
+            continue
+        detail = f"\t{action.detail}" if action.detail else ""
+        print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
 
 
 def _search_command(args: argparse.Namespace, roots: list[Path]) -> int:

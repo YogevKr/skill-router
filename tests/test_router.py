@@ -408,7 +408,7 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual([action.action for action in actions], ["conflict"])
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
 
-class NativeAdoptionTests(SkillFixture, unittest.TestCase):
+class NativeSymlinkAdoptionTests(SkillFixture, unittest.TestCase):
     def test_native_adoption_uses_a_direct_symlink_source(self) -> None:
         home = self.root / "home"
         project_root = home / "projects" / "codexspin" / "skills"
@@ -439,6 +439,7 @@ class NativeAdoptionTests(SkillFixture, unittest.TestCase):
         self.assertEqual([action.action for action in actions], ["keep"])
         self.assertEqual(saved.assignment_map()["codex"].source, router_skill / "SKILL.md")
 
+class NativeCopyAdoptionTests(SkillFixture, unittest.TestCase):
     def test_native_adoption_moves_direct_skill_to_router_storage(self) -> None:
         home = self.root / "home"
         shared_root = home / ".agents" / "skills"

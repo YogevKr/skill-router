@@ -170,23 +170,42 @@ def _validate_native_paths(
 ) -> None:
     """Validate direct native copies before adoption changes files."""
 
-    allowed_sources = {
-        path.resolve()
-        for path in native_paths
-        if path.is_dir()
-    }
+    _validate_native_source(native_paths, source_dir, router_dir, skill_id)
+    _validate_router_source(source_dir, router_dir)
+    for path in native_paths:
+        _validate_native_path(path, source_dir, router_dir)
+
+
+def _validate_native_source(
+    native_paths: Iterable[Path],
+    source_dir: Path,
+    router_dir: Path,
+    skill_id: str,
+) -> None:
+    """Require the selected source to be a direct native path."""
+
+    allowed_sources = {path.resolve() for path in native_paths if path.is_dir()}
     if source_dir != router_dir.resolve() and source_dir not in allowed_sources:
         raise ValueError(f"skill is not a direct native skill: {skill_id}")
+
+
+def _validate_router_source(source_dir: Path, router_dir: Path) -> None:
+    """Reject a different existing router copy."""
+
     if router_dir.exists() and router_dir.resolve() != source_dir:
         if not _same_directory(router_dir, source_dir):
             raise ValueError(f"router source already differs: {router_dir}")
-    for path in native_paths:
-        if path.is_symlink():
-            target = path.resolve()
-            if target != source_dir and target != router_dir.resolve():
-                raise ValueError(f"native link points elsewhere: {path}")
-        elif path.resolve() != source_dir and not _same_directory(path, source_dir):
-            raise ValueError(f"native copy differs: {path}")
+
+
+def _validate_native_path(path: Path, source_dir: Path, router_dir: Path) -> None:
+    """Validate one native copy or link."""
+
+    if path.is_symlink():
+        target = path.resolve()
+        if target != source_dir and target != router_dir.resolve():
+            raise ValueError(f"native link points elsewhere: {path}")
+    elif path.resolve() != source_dir and not _same_directory(path, source_dir):
+        raise ValueError(f"native copy differs: {path}")
 
 
 def _native_exposed_targets(
