@@ -175,6 +175,19 @@ creates router-managed links in the configured agent roots, and records the assi
 Ripwire source files. Run `skill-router manage` after adoption to change the four exposure columns.
 If Ripwire runs `skills/install.sh --codex` again, run the adoption command again.
 
+## Adopt a native skill
+
+Move one direct skill into router-owned storage and preserve its native exposure:
+
+```sh
+skill-router adopt native local-tools
+skill-router adopt native local-tools --apply
+```
+
+The command copies the skill to `~/.local/share/skill-router/skills`, keeps backups of existing
+native directories, removes the shared native copy, and creates managed links for its configured targets.
+Use this command for a skill that has no plugin owner. The command refuses different copies of the same skill.
+
 ## Jev recommendations
 
 Install the optional provider:

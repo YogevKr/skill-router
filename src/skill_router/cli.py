@@ -20,13 +20,16 @@ from .config import (
 )
 from .jev import JevProvider, Recommendation, recommend_local
 from .manager import (
+    apply_native_adoption,
     apply_ripwire_adoption,
     config_after_sync,
     default_source_roots,
+    plan_native_adoption,
     plan_ripwire_adoption,
     ripwire_source_root,
     run_menu,
     sync_assignments,
+    SyncAction,
 )
 from .search import search_skills
 from .state import claude_plugin_roots, inspect_skills
@@ -357,6 +360,63 @@ def _adopt_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _adopt_native_command(args: argparse.Namespace) -> int:
+    if not args.skill_id:
+        print("native adoption needs a skill ID", file=sys.stderr)
+        return 2
+    try:
+        current = load_config()
+        skills = scan_roots(default_source_roots())
+        skill = next(
+            (value for value in skills if value.skill_id.casefold() == args.skill_id.casefold()),
+            None,
+        )
+        if skill is None:
+            print(f"skill not found: {args.skill_id}", file=sys.stderr)
+            return 2
+        plan = plan_native_adoption(current, skill)
+        if (plan.router_dir / "SKILL.md").is_file():
+            planned = sync_assignments(plan.config, prune=True)
+        else:
+            targets = plan.config.assignment_map()[plan.skill_id].targets
+            planned = [
+                SyncAction(
+                    "link",
+                    target,
+                    plan.skill_id,
+                    plan.config.roots()[target] / plan.skill_id,
+                    plan.router_dir / "SKILL.md",
+                )
+                for target in sorted(targets)
+            ]
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print("provider\tnative")
+    print(f"skill\t{plan.skill_id}")
+    print(f"source\t{plan.source_dir}")
+    print(f"router-source\t{plan.router_dir}")
+    for path in plan.shared_paths:
+        print(f"remove\tshared\t{path}")
+    for action in planned:
+        if action.skill_id != plan.skill_id:
+            continue
+        detail = f"\t{action.detail}" if action.detail else ""
+        print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
+    if not args.apply:
+        print("dry-run\tuse --apply to adopt")
+        return 0
+    try:
+        saved, actions = apply_native_adoption(plan)
+        path = save_config(saved)
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"saved\t{path}")
+    print(f"applied\t{len(actions)} sync actions")
+    return 0
+
+
 def _search_command(args: argparse.Namespace, roots: list[Path]) -> int:
     results = search_skills(scan_roots(roots), args.query, limit=args.limit)
     if args.json:
@@ -395,7 +455,7 @@ def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
     if args.command == "sync":
         return _sync_command(args)
     if args.command == "adopt":
-        return _adopt_command(args)
+        return _adopt_native_command(args) if args.provider == "native" else _adopt_command(args)
     return None
 
 
@@ -457,8 +517,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--json", action="store_true")
 
     adopt = subparsers.add_parser("adopt", help="take ownership of external skill links")
-    adopt.add_argument("provider", choices=("ripwire",))
-    adopt.add_argument("--apply", action="store_true", help="remove shared links and create managed links")
+    adopt.add_argument("provider", choices=("ripwire", "native"))
+    adopt.add_argument("skill_id", nargs="?", help="skill ID for native adoption")
+    adopt.add_argument("--apply", action="store_true", help="apply the adoption plan")
 
     load = subparsers.add_parser("load", help="load one skill body")
     load.add_argument("skill_id")

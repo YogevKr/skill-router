@@ -49,10 +49,34 @@ class RipwireAdoptionPlan:
     shared_links: tuple[Path, ...]
 
 
+@dataclass(frozen=True)
+class NativeAdoptionPlan:
+    """A plan to move one native skill into router-owned storage."""
+
+    config: RouterConfig
+    skill_id: str
+    source_dir: Path
+    router_dir: Path
+    native_paths: tuple[Path, ...]
+    shared_paths: tuple[Path, ...]
+
+
 def ripwire_source_root(home: Path | None = None) -> Path:
     """Return Ripwire's installed skill source root."""
 
-    return (home or Path.home()) / ".local" / "share" / "ripwire" / "skills"
+    return _local_share_source_root(home, "ripwire")
+
+
+def router_source_root(home: Path | None = None) -> Path:
+    """Return the router-owned skill source root."""
+
+    return _local_share_source_root(home, "skill-router")
+
+
+def _local_share_source_root(home: Path | None, owner: str) -> Path:
+    """Return one owner directory under the local data root."""
+
+    return (home or Path.home()) / ".local" / "share" / owner / "skills"
 
 
 def _provider_source_roots(home: Path) -> list[Path]:
@@ -72,7 +96,166 @@ def _native_source_roots() -> list[Path]:
 def default_source_roots() -> list[Path]:
     """Return the personal and installed provider skill roots."""
 
-    return _provider_source_roots(Path.home()) + _native_source_roots()
+    router = router_source_root(Path.home())
+    roots = _provider_source_roots(Path.home())
+    if router.is_dir():
+        roots.append(router)
+    return roots + _native_source_roots()
+
+
+def _same_directory(left: Path, right: Path) -> bool:
+    """Return whether two directories contain the same files and bytes."""
+
+    left_files = {
+        path.relative_to(left).as_posix()
+        for path in left.rglob("*")
+        if path.is_file()
+    }
+    right_files = {
+        path.relative_to(right).as_posix()
+        for path in right.rglob("*")
+        if path.is_file()
+    }
+    if left_files != right_files:
+        return False
+    for relative in left_files:
+        try:
+            if left.joinpath(relative).read_bytes() != right.joinpath(relative).read_bytes():
+                return False
+        except (OSError, UnicodeError):
+            return False
+    return True
+
+
+def _native_skill_paths(skill_id: str, home: Path, config: RouterConfig) -> tuple[Path, ...]:
+    """Return existing direct native paths for one skill."""
+
+    roots = [home / ".agents" / "skills", *config.roots().values()]
+    values: list[Path] = []
+    for root in dict.fromkeys(roots):
+        path = root / skill_id
+        if path.is_dir() or path.is_symlink():
+            values.append(path)
+    return tuple(values)
+
+
+def _validate_native_paths(
+    native_paths: Iterable[Path],
+    source_dir: Path,
+    router_dir: Path,
+    skill_id: str,
+) -> None:
+    """Validate direct native copies before adoption changes files."""
+
+    allowed_sources = {
+        path.resolve()
+        for path in native_paths
+        if path.is_dir() and not path.is_symlink()
+    }
+    if source_dir != router_dir.resolve() and source_dir not in allowed_sources:
+        raise ValueError(f"skill is not a direct native skill: {skill_id}")
+    if router_dir.exists() and router_dir.resolve() != source_dir:
+        if not _same_directory(router_dir, source_dir):
+            raise ValueError(f"router source already differs: {router_dir}")
+    for path in native_paths:
+        if path.is_symlink():
+            target = path.resolve()
+            if target != source_dir and target != router_dir.resolve():
+                raise ValueError(f"native link points elsewhere: {path}")
+        elif path.resolve() != source_dir and not _same_directory(path, source_dir):
+            raise ValueError(f"native copy differs: {path}")
+
+
+def _native_exposed_targets(
+    config: RouterConfig,
+    skill_id: str,
+    native_paths: Iterable[Path],
+    shared_root: Path,
+) -> frozenset[str]:
+    """Return targets that currently expose a direct native skill."""
+
+    values = set()
+    if any(path.parent == shared_root for path in native_paths):
+        values.update(TARGETS)
+    else:
+        values.update(
+            target
+            for target, root in config.roots().items()
+            if root / skill_id in native_paths
+        )
+    return frozenset(values & set(TARGETS))
+
+
+def plan_native_adoption(
+    config: RouterConfig,
+    skill: Skill,
+    *,
+    home: Path | None = None,
+) -> NativeAdoptionPlan:
+    """Plan ownership of one direct native skill without changing files."""
+
+    home = home or Path.home()
+    source_dir = skill.path.resolve().parent
+    router_dir = router_source_root(home) / skill.skill_id
+    native_paths = _native_skill_paths(skill.skill_id, home, config)
+    _validate_native_paths(native_paths, source_dir, router_dir, skill.skill_id)
+
+    shared_root = home / ".agents" / "skills"
+    shared_paths = tuple(path for path in native_paths if path.parent == shared_root)
+    assignments = config.assignment_map()
+    current = assignments.get(skill.skill_id)
+    exposed_targets = _native_exposed_targets(config, skill.skill_id, native_paths, shared_root)
+    if current and current.enabled:
+        exposed_targets = frozenset(set(exposed_targets) | set(current.targets))
+    assignments[skill.skill_id] = SkillAssignment(
+        skill_id=skill.skill_id,
+        source=router_dir / "SKILL.md",
+        targets=exposed_targets,
+        enabled=bool(exposed_targets),
+        native_targets=exposed_targets,
+    )
+    updated = replace(
+        config,
+        target_roots=tuple(sorted(config.roots().items())),
+        assignments=tuple(
+            sorted(assignments.values(), key=lambda item: item.skill_id.casefold())
+        ),
+    )
+    return NativeAdoptionPlan(
+        updated,
+        skill.skill_id,
+        source_dir,
+        router_dir,
+        tuple(sorted(native_paths)),
+        tuple(sorted(shared_paths)),
+    )
+
+
+def apply_native_adoption(plan: NativeAdoptionPlan) -> tuple[RouterConfig, list[SyncAction]]:
+    """Move one native skill into router storage and link configured targets."""
+
+    plan.router_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not plan.router_dir.exists():
+        shutil.copytree(plan.source_dir, plan.router_dir)
+    backup_root = plan.router_dir.parent.parent / "backups" / plan.skill_id
+    roots = plan.config.roots()
+    for path in plan.native_paths:
+        if path.resolve() == plan.router_dir.resolve():
+            continue
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            label = path.parent.parent.name
+            backup = backup_root / label
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            if backup.exists():
+                shutil.rmtree(backup)
+            path.rename(backup)
+        if path.parent == roots.get("codex") or path.parent == roots.get("claude"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(plan.router_dir.resolve(), path, target_is_directory=True)
+    actions = sync_assignments(plan.config, apply=True, prune=True)
+    return config_after_sync(plan.config, actions), actions
 
 
 def plan_ripwire_adoption(

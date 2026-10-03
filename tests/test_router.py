@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 import io
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -20,9 +21,11 @@ from skill_router.config import (
 )
 from skill_router.jev import JevProvider, recommend_local
 from skill_router.manager import (
+    apply_native_adoption,
     _run_curses_menu,
     apply_ripwire_adoption,
     config_after_sync,
+    plan_native_adoption,
     plan_ripwire_adoption,
     run_menu,
     sync_assignments,
@@ -403,6 +406,41 @@ class ManagerTests(SkillFixture, unittest.TestCase):
 
         self.assertEqual([action.action for action in actions], ["conflict"])
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+
+class NativeAdoptionTests(SkillFixture, unittest.TestCase):
+    def test_native_adoption_moves_direct_skill_to_router_storage(self) -> None:
+        home = self.root / "home"
+        shared_root = home / ".agents" / "skills"
+        shared_skill = shared_root / "local-tools"
+        shared_skill.mkdir(parents=True)
+        (shared_skill / "SKILL.md").write_text(
+            "---\nname: local-tools\ndescription: Find local tools.\n---\n\nUse the catalog.\n",
+            encoding="utf-8",
+        )
+        claude_skill = home / ".claude" / "skills" / "local-tools"
+        claude_skill.parent.mkdir(parents=True)
+        shutil.copytree(shared_skill, claude_skill)
+        codex_root = home / ".codex" / "skills"
+        codex_root.mkdir(parents=True)
+        (codex_root / "local-tools").symlink_to(shared_skill, target_is_directory=True)
+        config = RouterConfig(
+            target_roots=(("codex", codex_root), ("claude", claude_skill.parent))
+        )
+        skill = scan_roots([shared_root])[0]
+
+        plan = plan_native_adoption(config, skill, home=home)
+        self.assertEqual(plan.config.assignment_map()["local-tools"].targets, frozenset({"codex", "claude"}))
+
+        saved, actions = apply_native_adoption(plan)
+        router_skill = home / ".local" / "share" / "skill-router" / "skills" / "local-tools"
+        self.assertTrue((router_skill / "SKILL.md").is_file())
+        self.assertFalse(shared_skill.exists())
+        self.assertTrue((codex_root / "local-tools").is_symlink())
+        self.assertTrue((claude_skill.parent / "local-tools").is_symlink())
+        self.assertTrue((home / ".local" / "share" / "skill-router" / "backups" / "local-tools" / ".agents").is_dir())
+        self.assertTrue((home / ".local" / "share" / "skill-router" / "backups" / "local-tools" / ".claude").is_dir())
+        self.assertEqual([action.action for action in actions], ["keep", "keep"])
+        self.assertEqual(saved.assignment_map()["local-tools"].source, router_skill / "SKILL.md")
 
 class StateManagerTests(SkillFixture, unittest.TestCase):
     def test_ripwire_adoption_moves_shared_links_to_managed_targets(self) -> None:
