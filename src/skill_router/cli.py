@@ -30,6 +30,7 @@ from .manager import (
     run_menu,
     sync_assignments,
     SyncAction,
+    native_skill,
 )
 from .search import search_skills
 from .state import claude_plugin_roots, inspect_skills
@@ -263,7 +264,7 @@ def _status_command(args: argparse.Namespace) -> int:
     roots = (
         [Path(value).expanduser() for value in args.root]
         if args.root
-        else claude_plugin_roots() + default_source_roots()
+        else default_source_roots() + claude_plugin_roots()
     )
     rows = inspect_skills(scan_roots(roots), current)
     assignments = current.assignment_map()
@@ -366,11 +367,13 @@ def _adopt_native_command(args: argparse.Namespace) -> int:
         return 2
     try:
         current = load_config()
-        skills = scan_roots(default_source_roots())
-        skill = next(
-            (value for value in skills if value.skill_id.casefold() == args.skill_id.casefold()),
-            None,
-        )
+        skill = native_skill(args.skill_id, current)
+        if skill is None:
+            skills = scan_roots(default_source_roots())
+            skill = next(
+                (value for value in skills if value.skill_id.casefold() == args.skill_id.casefold()),
+                None,
+            )
         if skill is None:
             print(f"skill not found: {args.skill_id}", file=sys.stderr)
             return 2

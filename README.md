@@ -186,7 +186,9 @@ skill-router adopt native local-tools --apply
 
 The command copies the skill to `~/.local/share/skill-router/skills`, keeps backups of existing
 native directories, removes the shared native copy, and creates managed links for its configured targets.
-Use this command for a skill that has no plugin owner. The command refuses different copies of the same skill.
+It also accepts a direct native symlink, such as a project-owned Claude skill link.
+Use this command for a skill that has no plugin owner. Plugin cache sources remain external.
+The command refuses different copies of the same skill.
 
 ## Jev recommendations
 

@@ -25,6 +25,7 @@ from .manager import (
     plan_ripwire_adoption,
     ripwire_source_root,
     router_source_root,
+    native_skill,
     run_menu,
     sync_assignments,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "plan_ripwire_adoption",
     "ripwire_source_root",
     "router_source_root",
+    "native_skill",
     "load_config",
     "recommend_local",
     "run_menu",

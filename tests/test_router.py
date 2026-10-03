@@ -25,6 +25,7 @@ from skill_router.manager import (
     _run_curses_menu,
     apply_ripwire_adoption,
     config_after_sync,
+    native_skill,
     plan_native_adoption,
     plan_ripwire_adoption,
     run_menu,
@@ -408,6 +409,36 @@ class ManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
 
 class NativeAdoptionTests(SkillFixture, unittest.TestCase):
+    def test_native_adoption_uses_a_direct_symlink_source(self) -> None:
+        home = self.root / "home"
+        project_root = home / "projects" / "codexspin" / "skills"
+        source = project_root / "codex"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text(
+            "---\nname: codex\ndescription: Run Codex.\n---\n\nUse Codex.\n",
+            encoding="utf-8",
+        )
+        claude_root = home / ".claude" / "skills"
+        claude_root.mkdir(parents=True)
+        native_link = claude_root / "codex"
+        native_link.symlink_to(source, target_is_directory=True)
+        config = RouterConfig(target_roots=(("claude", claude_root),))
+
+        skill = native_skill("codex", config, home=home)
+        self.assertIsNotNone(skill)
+        assert skill is not None
+        self.assertEqual(skill.path.parent.resolve(), source.resolve())
+        plan = plan_native_adoption(config, skill, home=home)
+
+        saved, actions = apply_native_adoption(plan)
+        router_skill = home / ".local" / "share" / "skill-router" / "skills" / "codex"
+        self.assertTrue((router_skill / "SKILL.md").is_file())
+        self.assertTrue(source.is_dir())
+        self.assertTrue(native_link.is_symlink())
+        self.assertEqual(native_link.resolve(), router_skill.resolve())
+        self.assertEqual([action.action for action in actions], ["keep"])
+        self.assertEqual(saved.assignment_map()["codex"].source, router_skill / "SKILL.md")
+
     def test_native_adoption_moves_direct_skill_to_router_storage(self) -> None:
         home = self.root / "home"
         shared_root = home / ".agents" / "skills"

@@ -10,7 +10,7 @@ import sys
 import textwrap
 from typing import Callable, Iterable
 
-from .catalog import Skill
+from .catalog import Skill, scan_roots
 from .config import (
     TARGETS,
     ManagedLink,
@@ -139,6 +139,29 @@ def _native_skill_paths(skill_id: str, home: Path, config: RouterConfig) -> tupl
     return tuple(values)
 
 
+def native_skill(
+    skill_id: str,
+    config: RouterConfig,
+    *,
+    home: Path | None = None,
+) -> Skill | None:
+    """Find a skill from a direct native path, including a safe symlink target."""
+
+    home = home or Path.home()
+    wanted = skill_id.casefold()
+    for native_path in _native_skill_paths(skill_id, home, config):
+        source_dir = native_path.resolve()
+        if ".claude" in source_dir.parts and "plugins" in source_dir.parts:
+            continue
+        candidate = source_dir / "SKILL.md"
+        if not candidate.is_file():
+            continue
+        for skill in scan_roots([source_dir.parent]):
+            if skill.skill_id.casefold() == wanted and skill.path.parent.resolve() == source_dir:
+                return skill
+    return None
+
+
 def _validate_native_paths(
     native_paths: Iterable[Path],
     source_dir: Path,
@@ -150,7 +173,7 @@ def _validate_native_paths(
     allowed_sources = {
         path.resolve()
         for path in native_paths
-        if path.is_dir() and not path.is_symlink()
+        if path.is_dir()
     }
     if source_dir != router_dir.resolve() and source_dir not in allowed_sources:
         raise ValueError(f"skill is not a direct native skill: {skill_id}")
