@@ -241,17 +241,17 @@ def _print_status_rows(values: list[dict[str, object]]) -> int:
     skill_width = max([len("skill"), *(len(str(row["id"])) for row in values)], default=5)
     print(
         f"{'skill':<{skill_width}}  {'router claude':<13}  {'router codex':<12}  "
-        f"{'codex native':<12}  claude native"
+        f"{'codex exposure':<14}  claude exposure"
     )
     for row in values:
         router = row["router"]
         router_claude = "yes" if "claude" in router else "no"
         router_codex = "yes" if "codex" in router else "no"
-        codex_native = "yes" if row["codex"] == "native" else "no"
-        claude_native = "yes" if row["claude"] == "native" else "no"
+        codex_native = str(row["codex"])
+        claude_native = str(row["claude"])
         print(
             f"{row['id']:<{skill_width}}  {router_claude:<13}  {router_codex:<12}  "
-            f"{codex_native:<12}  {claude_native}"
+            f"{codex_native:<14}  {claude_native}"
         )
     return 0
 
@@ -417,7 +417,7 @@ def _native_adoption_plan(
     plan = plan_native_adoption(current, skill)
     if (plan.router_dir / "SKILL.md").is_file():
         return plan, sync_assignments(plan.config, prune=True)
-    targets = plan.config.assignment_map()[plan.skill_id].targets
+    targets = effective_native_targets(plan.config.assignment_map()[plan.skill_id])
     actions = [
         SyncAction(
             "link",
@@ -476,7 +476,7 @@ def _load_command(args: argparse.Namespace, roots: list[Path]) -> int:
 def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
     if args.command == "config":
         return _config_command(args)
-    if args.command == "manage":
+    if args.command in {"manage", "select"}:
         return _manage_command(args)
     if args.command == "assignments":
         return _assignments_command(args)
@@ -529,7 +529,11 @@ def build_parser() -> argparse.ArgumentParser:
     target_set.add_argument("target_name", choices=("codex", "claude"))
     target_set.add_argument("target_path")
 
-    manage = subparsers.add_parser("manage", help="select skills and agent targets")
+    manage = subparsers.add_parser(
+        "manage",
+        aliases=("select",),
+        help="select skills and agent targets",
+    )
     manage.add_argument("--root", action="append", help="skill root; repeatable")
     manage.add_argument("--target", choices=("codex", "claude"), default="codex")
     manage.add_argument("--search", default="", help="initial skill filter")

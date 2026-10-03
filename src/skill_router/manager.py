@@ -247,13 +247,15 @@ def plan_native_adoption(
     assignments = config.assignment_map()
     current = assignments.get(skill.skill_id)
     exposed_targets = _native_exposed_targets(config, skill.skill_id, native_paths, shared_root)
-    if current and current.enabled:
-        exposed_targets = frozenset(set(exposed_targets) | set(current.targets))
+    if current is None:
+        router_targets = exposed_targets
+    else:
+        router_targets = current.targets
     assignments[skill.skill_id] = SkillAssignment(
         skill_id=skill.skill_id,
         source=router_dir / "SKILL.md",
-        targets=exposed_targets,
-        enabled=bool(exposed_targets),
+        targets=router_targets,
+        enabled=bool(router_targets or exposed_targets),
         native_targets=exposed_targets,
     )
     updated = replace(
@@ -474,14 +476,18 @@ def _render_menu(
 ) -> None:
     output_fn("")
     output_fn(
-        f"Skill manager: edit {active_layer} target {active_target} ({len(visible)} shown)"
+        f"Skill selector: edit {active_layer} target {active_target} ({len(visible)} shown)"
     )
     terminal_width = shutil.get_terminal_size(fallback=(120, 24)).columns
     skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
-    output_fn(
-        f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  {'router codex':<12}  "
-        f"{'codex native':<12}  {'claude native':<13}  description"
+    labels = ("router claude", "router codex", "codex native", "claude native")
+    heading = "  ".join(
+        f"{('> ' if layer == active_layer and target == active_target else '  ')}{label:<{width - 2}}"
+        for label, (layer, target), width in zip(
+            labels, COLUMN_TARGETS, (15, 14, 14, 15)
+        )
     )
+    output_fn(f"{'':>3}  {'skill':<{skill_width}}  {heading}  description")
     for index, skill in enumerate(visible, 1):
         prefix = (
             f"{index:>3}. {skill.skill_id:<{skill_width}}  "
@@ -661,63 +667,73 @@ def _run_curses_menu(
         cursor = min(cursor, max(0, len(visible) - 1))
         height, width = screen.getmaxyx()
         screen.erase()
-        screen.addnstr(
+
+        def safe_add(row: int, column: int, value: str, attribute: int = 0) -> None:
+            if row < 0 or row >= height or column < 0 or column >= width:
+                return
+            count = min(len(value), width - column - 1)
+            if count < 1:
+                return
+            try:
+                screen.addnstr(row, column, value, count, attribute)
+            except curses.error:
+                return
+
+        safe_add(
             0,
             0,
-            "Up/Down row | Left/Right column | Space toggle | a all | n none | "
-            "Enter review | s save+sync | / filter | q quit",
-            max(1, width - 1),
+            "Skill selector | Up/Down skill | Left/Right column | Space change | Enter review | "
+            "s save | / filter | q quit",
             curses.A_DIM,
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
         header_prefix = f"{'':>3}  {'skill':<{skill_width}}  "
 
-        def add_header(value: str, column: int, attribute: int) -> None:
-            if column >= width or not value:
-                return
-            screen.addnstr(1, column, value, min(len(value), width - column), attribute)
-
-        add_header(header_prefix, 0, curses.A_DIM)
-        header_column_widths = (13, 12, 12, 13)
+        safe_add(1, 0, header_prefix, curses.A_DIM)
+        header_column_widths = (15, 14, 14, 15)
         header_column = len(header_prefix)
         for column, ((layer, target), column_width) in enumerate(
             zip(COLUMN_TARGETS, header_column_widths)
         ):
             label = f"{layer} {target}"
             if column == active_column:
-                label = label.upper()
+                label = f"> {label.upper()}"
                 attribute = curses.A_DIM | curses.A_REVERSE
             else:
                 attribute = curses.A_DIM
-            add_header(f"{label:<{column_width}}", header_column, attribute)
+            safe_add(1, header_column, f"{label:<{column_width}}", attribute)
             header_column += column_width
             if column < len(COLUMN_TARGETS) - 1:
-                add_header("  ", header_column, curses.A_DIM)
+                safe_add(1, header_column, "  ", curses.A_DIM)
                 header_column += 2
-        add_header("description", header_column, curses.A_DIM)
+        safe_add(1, header_column, "description", curses.A_DIM)
         row_limit = max(1, height - 4)
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):
             index = offset + row
-            prefix = (
-                f"{index + 1:>3}. {skill.skill_id:<{skill_width}}  "
-                f"{_router_mark(skill.skill_id, router_selected, 'claude'):<13}  "
-                f"{_router_mark(skill.skill_id, router_selected, 'codex'):<12}  "
-                f"{_router_mark(skill.skill_id, native_selected, 'codex'):<12}  "
-                f"{_router_mark(skill.skill_id, native_selected, 'claude'):<13}  "
-            )
-            description_width = max(8, width - len(prefix) - 3)
+            prefix = f"{index + 1:>3}. {skill.skill_id:<{skill_width}}  "
+            safe_add(row + 2, 0, prefix, curses.A_BOLD if index == cursor else 0)
+            column_position = len(prefix)
+            for column, ((layer, target), column_width) in enumerate(
+                zip(COLUMN_TARGETS, header_column_widths)
+            ):
+                selected = _layer_selection(router_selected, native_selected, layer)
+                value = _router_mark(skill.skill_id, selected, target)
+                cell = f" {value:^5} "
+                attribute = curses.A_REVERSE if column == active_column else 0
+                safe_add(row + 2, column_position, f"{cell:<{column_width}}", attribute)
+                column_position += column_width
+                if column < len(COLUMN_TARGETS) - 1:
+                    safe_add(row + 2, column_position, "  ")
+                    column_position += 2
+            description_width = max(8, width - column_position - 3)
             description = textwrap.shorten(skill.description, width=description_width, placeholder="...")
-            line = prefix + "— " + description
-            if index == cursor:
-                screen.attron(curses.A_REVERSE)
-            screen.addnstr(row + 2, 0, line, max(1, width - 1))
-            if index == cursor:
-                screen.attroff(curses.A_REVERSE)
+            safe_add(row + 2, column_position, "— " + description)
         if not visible:
-            screen.addnstr(1, 0, "No matching skills.", max(1, width - 1))
-        status = f"Filter: {filter_text or '-'}"
-        screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
+            safe_add(1, 0, "No matching skills.")
+        active_layer, active_target = COLUMN_TARGETS[active_column]
+        status = f"Active: {active_layer} {active_target} | Filter: {filter_text or '-'}"
+        safe_add(max(0, height - 1), 0, status, curses.A_DIM)
         screen.refresh()
         return visible
 

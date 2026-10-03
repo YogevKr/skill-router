@@ -97,6 +97,8 @@ def claude_skill_overrides(*, home: Path | None = None, cwd: Path | None = None)
 
 def _source_label(path: Path) -> str:
     parts = path.parts
+    if "skill-router" in parts and ".local" in parts:
+        return "router"
     if "ripwire" in parts and ".local" in parts:
         return "ripwire"
     if "plugins" in parts and (".claude" in parts or "claude" in parts):

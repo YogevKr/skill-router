@@ -220,6 +220,11 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(main(["config", "target", "show", "--json"]), 0)
             self.assertIn('"codex"', output.getvalue())
 
+    def test_select_alias_dispatches_to_manager(self) -> None:
+        with patch("skill_router.cli._manage_command", return_value=0) as manage:
+            self.assertEqual(main(["select"]), 0)
+        manage.assert_called_once()
+
 class StateTests(unittest.TestCase):
     def test_enabled_plugin_root_uses_latest_install(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -438,6 +443,32 @@ class NativeSymlinkAdoptionTests(SkillFixture, unittest.TestCase):
         self.assertEqual(native_link.resolve(), router_skill.resolve())
         self.assertEqual([action.action for action in actions], ["keep"])
         self.assertEqual(saved.assignment_map()["codex"].source, router_skill / "SKILL.md")
+
+    def test_native_adoption_preserves_router_targets_and_records_direct_exposure(self) -> None:
+        home = self.root / "home"
+        claude_root = home / ".claude" / "skills"
+        source = claude_root / "demystify-startup"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text(
+            "---\nname: demystify-startup\ndescription: Explain startup.\n---\n",
+            encoding="utf-8",
+        )
+        config = RouterConfig(
+            target_roots=(("claude", claude_root), ("codex", home / ".codex" / "skills")),
+            assignments=(
+                SkillAssignment(
+                    "demystify-startup",
+                    source / "SKILL.md",
+                    frozenset({"claude", "codex"}),
+                    native_targets=frozenset(),
+                ),
+            ),
+        )
+        skill = scan_roots([claude_root])[0]
+        plan = plan_native_adoption(config, skill, home=home)
+        assignment = plan.config.assignment_map()["demystify-startup"]
+        self.assertEqual(assignment.targets, frozenset({"claude", "codex"}))
+        self.assertEqual(assignment.native_targets, frozenset({"claude"}))
 
 class NativeCopyAdoptionTests(SkillFixture, unittest.TestCase):
     def test_native_adoption_moves_direct_skill_to_router_storage(self) -> None:

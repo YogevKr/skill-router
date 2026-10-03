@@ -74,23 +74,24 @@ Use the manager to review skills from these roots:
 ~/.claude/skills
 ```
 
-Open the menu with:
+Open the selector with:
 
 ```sh
 skill-router manage
+# `skill-router select` is an alias.
 ```
 
-The menu shows one skill per row.
+The selector shows one skill per row.
 In a terminal, use Up and Down to move between skills.
 Use Left and Right to move between the four columns.
-The active column header uses uppercase text and reverse color.
-Press Space to toggle the active column.
+The active header starts with `>` and the active cell uses reverse color.
+Press Space to change the active cell.
 Press Enter to review the selected skill, `s` to save and sync, and `q` to quit.
 Review mode supports Up, Down, Page Up, Page Down, Home, and End.
 Press `a` to select all shown rows in the active column.
 Press `n` to clear all shown rows in the active column.
 Press `/` to filter the list.
-When input is not interactive, use `m` to switch router or native.
+When input is not interactive, use `m` to switch router or native layers.
 Use `t codex` or `t claude` to choose the target.
 The line menu also accepts number and text commands.
 
@@ -103,8 +104,8 @@ The four columns store separate selections:
 | `codex native` | Sync may expose this skill in Codex's native skill root. |
 | `claude native` | Sync may expose this skill in Claude's native skill root. |
 
-The active column header shows the current cell group.
-For example, uppercase `NATIVE CODEX` means Space changes `codex native`.
+The active column marks the cell that Space changes.
+For example, `> NATIVE CODEX` means Space changes `codex native`.
 
 Use `--root` to choose other source roots.
 Use `--target` to choose the first target.
@@ -124,14 +125,26 @@ skill-router status
 skill-router status --json
 ```
 
-`router claude` and `router codex` show saved assignments.
-The native columns show direct exposure.
+`router claude` and `router codex` show saved router assignments.
+The native columns show direct exposure from filesystem links or native folders.
 The JSON view also includes Claude modes, locks, sources, and paths.
 
 Assignments persist in `~/.config/skill-router/config.toml`.
 Enter or `s` saves assignments and runs a safe sync.
 The sync creates missing links and prunes only managed links.
 The manager never removes direct native or plugin folders.
+
+## Skill ownership
+
+Router-owned personal skills live in `~/.local/share/skill-router/skills`.
+The selector manages links from that store into the Codex and Claude skill roots.
+
+Codex bundled skills stay under `~/.codex/skills/.system`.
+Claude plugin skills stay in their plugin cache and require plugin commands for enablement.
+Claude.ai synced skills stay in their synced directory and require `skillOverrides` for runtime control.
+
+Use `skill-router status --json` to inspect source ownership, filesystem exposure, and Claude mode.
+The `status` table reports `managed`, `native`, or `-` for each agent exposure.
 
 Set target roots when you need a non-default location:
 
