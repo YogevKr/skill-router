@@ -277,7 +277,13 @@ def _run_curses_menu(
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
         header_prefix = f"{'':>3}  {'skill':<{skill_width}}  "
-        screen.addnstr(1, 0, header_prefix, max(1, width - 1), curses.A_DIM)
+
+        def add_header(value: str, column: int, attribute: int) -> None:
+            if column >= width or not value:
+                return
+            screen.addnstr(1, column, value, min(len(value), width - column), attribute)
+
+        add_header(header_prefix, 0, curses.A_DIM)
         header_column_widths = (13, 12, 12, 13)
         header_column = len(header_prefix)
         for column, ((layer, target), column_width) in enumerate(
@@ -289,18 +295,12 @@ def _run_curses_menu(
                 attribute = curses.A_DIM | curses.A_REVERSE
             else:
                 attribute = curses.A_DIM
-            screen.addnstr(
-                1,
-                header_column,
-                f"{label:<{column_width}}",
-                column_width,
-                attribute,
-            )
+            add_header(f"{label:<{column_width}}", header_column, attribute)
             header_column += column_width
             if column < len(COLUMN_TARGETS) - 1:
-                screen.addnstr(1, header_column, "  ", 2, curses.A_DIM)
+                add_header("  ", header_column, curses.A_DIM)
                 header_column += 2
-        screen.addnstr(1, header_column, "description", max(1, width - header_column - 1), curses.A_DIM)
+        add_header("description", header_column, curses.A_DIM)
         row_limit = max(1, height - 4)
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):

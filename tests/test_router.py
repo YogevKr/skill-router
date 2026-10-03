@@ -404,16 +404,26 @@ class StateManagerTests(SkillFixture, unittest.TestCase):
 class MenuDisplayTests(SkillFixture, unittest.TestCase):
     def test_curses_keeps_column_header_above_rows(self) -> None:
         class FakeScreen:
-            def __init__(self) -> None:
+            def __init__(self, width: int = 120) -> None:
+                self.width = width
                 self.lines: list[tuple[int, str]] = []
 
             def getmaxyx(self) -> tuple[int, int]:
-                return (10, 120)
+                return (10, self.width)
 
             def erase(self) -> None:
                 pass
 
-            def addnstr(self, row: int, _column: int, value: str, *_args: object) -> None:
+            def addnstr(self, row: int, column: int, value: str, *args: object) -> None:
+                count = args[0] if args else len(value)
+                if (
+                    not isinstance(count, int)
+                    or column < 0
+                    or column >= self.width
+                    or count < 1
+                    or column + count > self.width
+                ):
+                    raise AssertionError("screen write exceeds terminal width")
                 self.lines.append((row, value))
 
             def refresh(self) -> None:
@@ -447,22 +457,19 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
             error = RuntimeError
 
             @staticmethod
-            def wrapper(function: object) -> RouterConfig | None:
-                return function(FakeScreen())
-
-            @staticmethod
             def curs_set(_value: int) -> None:
                 pass
 
-        screen = FakeScreen()
-
-        def wrapper(function: object) -> RouterConfig | None:
-            return function(screen)
-
-        FakeCurses.wrapper = staticmethod(wrapper)
         skill = Skill("demo", "demo", "A demo skill.", self.root / "demo" / "SKILL.md", "")
-        with patch.dict("sys.modules", {"curses": FakeCurses}):
-            _run_curses_menu([skill], RouterConfig(), target="codex", search="")
+
+        def render(width: int) -> FakeScreen:
+            screen = FakeScreen(width)
+            FakeCurses.wrapper = staticmethod(lambda function: function(screen))
+            with patch.dict("sys.modules", {"curses": FakeCurses}):
+                _run_curses_menu([skill], RouterConfig(), target="codex", search="")
+            return screen
+
+        screen = render(120)
 
         header = "".join(value for row, value in screen.lines if row == 1)
         skill_row = next(value for row, value in screen.lines if row == 2)
@@ -470,6 +477,7 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         self.assertIn("ROUTER CODEX", header)
         self.assertIn("description", header)
         self.assertTrue(skill_row.startswith("  1. demo"))
+        self.assertTrue(render(40).lines)
 
     def test_curses_arrows_select_columns(self) -> None:
         class FakeScreen:
