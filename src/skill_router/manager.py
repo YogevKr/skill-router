@@ -146,11 +146,6 @@ def _layer_selection(
     return native_selected if layer == "native" else router_selected
 
 
-def _column_label(column: int) -> str:
-    layer, target = COLUMN_TARGETS[column]
-    return f"{layer} {target}"
-
-
 def _router_mark(skill_id: str, selected: dict[str, set[str]], target: str) -> str:
     return "yes" if target in selected.get(skill_id, set()) else "no"
 
@@ -275,25 +270,38 @@ def _run_curses_menu(
         screen.addnstr(
             0,
             0,
-            f"Skill manager: edit {_column_label(active_column)} ({len(visible)} shown)",
-            max(1, width - 1),
-            curses.A_BOLD,
-        )
-        screen.addnstr(
-            1,
-            0,
             "Up/Down row | Left/Right column | Space toggle | a all | n none | "
             "Enter save | / filter | q quit",
             max(1, width - 1),
+            curses.A_DIM,
         )
         skill_width = max([len("skill"), *(len(skill.skill_id) for skill in visible)], default=5)
-        columns = (
-            f"{'':>3}  {'skill':<{skill_width}}  {'router claude':<13}  "
-            f"{'router codex':<12}  {'codex native':<12}  "
-            f"{'claude native':<13}  description"
-        )
-        screen.addnstr(2, 0, columns, max(1, width - 1), curses.A_DIM)
-        row_limit = max(1, height - 5)
+        header_prefix = f"{'':>3}  {'skill':<{skill_width}}  "
+        screen.addnstr(1, 0, header_prefix, max(1, width - 1), curses.A_DIM)
+        header_column_widths = (13, 12, 12, 13)
+        header_column = len(header_prefix)
+        for column, ((layer, target), column_width) in enumerate(
+            zip(COLUMN_TARGETS, header_column_widths)
+        ):
+            label = f"{layer} {target}"
+            if column == active_column:
+                label = label.upper()
+                attribute = curses.A_DIM | curses.A_REVERSE
+            else:
+                attribute = curses.A_DIM
+            screen.addnstr(
+                1,
+                header_column,
+                f"{label:<{column_width}}",
+                column_width,
+                attribute,
+            )
+            header_column += column_width
+            if column < len(COLUMN_TARGETS) - 1:
+                screen.addnstr(1, header_column, "  ", 2, curses.A_DIM)
+                header_column += 2
+        screen.addnstr(1, header_column, "description", max(1, width - header_column - 1), curses.A_DIM)
+        row_limit = max(1, height - 4)
         offset = min(max(0, cursor - row_limit + 1), max(0, len(visible) - row_limit))
         for row, skill in enumerate(visible[offset : offset + row_limit]):
             index = offset + row
@@ -309,12 +317,12 @@ def _run_curses_menu(
             line = prefix + "— " + description
             if index == cursor:
                 screen.attron(curses.A_REVERSE)
-            screen.addnstr(row + 3, 0, line, max(1, width - 1))
+            screen.addnstr(row + 2, 0, line, max(1, width - 1))
             if index == cursor:
                 screen.attroff(curses.A_REVERSE)
         if not visible:
-            screen.addnstr(2, 0, "No matching skills.", max(1, width - 1))
-        status = f"Edit: {_column_label(active_column)} | Filter: {filter_text or '-'}"
+            screen.addnstr(1, 0, "No matching skills.", max(1, width - 1))
+        status = f"Filter: {filter_text or '-'}"
         screen.addnstr(max(0, height - 1), 0, status, max(1, width - 1))
         screen.refresh()
         return visible

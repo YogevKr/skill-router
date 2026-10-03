@@ -464,9 +464,10 @@ class MenuDisplayTests(SkillFixture, unittest.TestCase):
         with patch.dict("sys.modules", {"curses": FakeCurses}):
             _run_curses_menu([skill], RouterConfig(), target="codex", search="")
 
-        header = next(value for row, value in screen.lines if row == 2)
-        skill_row = next(value for row, value in screen.lines if row == 3)
+        header = "".join(value for row, value in screen.lines if row == 1)
+        skill_row = next(value for row, value in screen.lines if row == 2)
         self.assertIn("router claude", header)
+        self.assertIn("ROUTER CODEX", header)
         self.assertIn("description", header)
         self.assertTrue(skill_row.startswith("  1. demo"))
 
