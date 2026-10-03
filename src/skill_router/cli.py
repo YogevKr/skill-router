@@ -249,6 +249,9 @@ def _print_status_rows(values: list[dict[str, object]]) -> int:
         router_codex = "yes" if "codex" in router else "no"
         codex_native = str(row["codex"])
         claude_native = str(row["claude"])
+        claude_mode = str(row.get("claude_mode", "-"))
+        if claude_mode not in {"-", "on"} and claude_native != "-":
+            claude_native = f"{claude_native}/{claude_mode}"
         print(
             f"{row['id']:<{skill_width}}  {router_claude:<13}  {router_codex:<12}  "
             f"{codex_native:<14}  {claude_native}"
