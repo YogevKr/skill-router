@@ -100,6 +100,18 @@ def _print_recommendation(result: Recommendation, *, as_json: bool) -> None:
 
 def _recommend(args: argparse.Namespace, roots: list[Path]) -> int:
     skills = scan_roots(roots)
+    if args.target is not None:
+        try:
+            config = load_config()
+        except ConfigError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        assigned = {
+            assignment.skill_id
+            for assignment in config.assignments
+            if assignment.enabled and args.target in assignment.targets
+        }
+        skills = [skill for skill in skills if skill.skill_id in assigned]
     provider = args.provider
     if provider == "auto":
         try:
@@ -551,6 +563,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recommend.add_argument("query")
     recommend.add_argument("--provider", choices=("auto", "local", "jev"), default="auto")
+    recommend.add_argument(
+        "--target",
+        choices=("codex", "claude"),
+        help="route only skills assigned to this agent",
+    )
     recommend.add_argument("--root", action="append", help="skill vault root; repeatable")
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--shortlist-limit", type=int, default=8)

@@ -254,6 +254,18 @@ The result has one of these statuses: `route`, `no_tool`, or `fallback`.
 Missing keys, missing SDKs, timeouts, and invalid responses use local fallback.
 Jev never loads a skill or grants tool access.
 
+Agents can route only through skills assigned to their target:
+
+```sh
+skill-router recommend "debug a Python traceback" --target codex --provider auto
+skill-router recommend "debug a Python traceback" --target claude --provider auto
+```
+
+The `skill-router-discovery` skill teaches agents this flow.
+The manager assigns that skill to Codex and Claude by default.
+The skill lives in the router vault and links into both agent skill directories.
+Start a new agent session after changing its metadata.
+
 ## Skill format
 
 The router accepts normal `SKILL.md` files. It reads `name` and `description` from optional YAML front matter.

@@ -90,6 +90,64 @@ class RouterTests(SkillFixture, unittest.TestCase):
         with self.assertRaises(KeyError):
             load_skill("../python-debug", [self.root])
 
+    def test_recommend_target_uses_router_assignments(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            "os.environ", {"SKILL_ROUTER_CONFIG": str(Path(td) / "config.toml")}
+        ), redirect_stdout(io.StringIO()) as output:
+            save_config(
+                RouterConfig(
+                    assignments=(
+                        SkillAssignment(
+                            "python-debug",
+                            self.root / "python-debug" / "SKILL.md",
+                            frozenset({"codex"}),
+                        ),
+                        SkillAssignment(
+                            "react-ui",
+                            self.root / "react-ui" / "SKILL.md",
+                            frozenset({"claude"}),
+                        ),
+                    )
+                )
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "recommend",
+                        "Build React user interfaces",
+                        "--provider",
+                        "local",
+                        "--target",
+                        "codex",
+                        "--root",
+                        str(self.root),
+                        "--json",
+                    ]
+                ),
+                0,
+            )
+            self.assertIn('"status": "no_tool"', output.getvalue())
+
+            output.seek(0)
+            output.truncate(0)
+            self.assertEqual(
+                main(
+                    [
+                        "recommend",
+                        "Build React user interfaces",
+                        "--provider",
+                        "local",
+                        "--target",
+                        "claude",
+                        "--root",
+                        str(self.root),
+                        "--json",
+                    ]
+                ),
+                0,
+            )
+            self.assertIn('"id": "react-ui"', output.getvalue())
+
 
 class JevTests(SkillFixture, unittest.TestCase):
     def test_local_recommendation_routes_one_skill(self) -> None:
