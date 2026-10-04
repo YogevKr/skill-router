@@ -84,23 +84,30 @@ def _provider_source_roots(home: Path) -> list[Path]:
     return [ripwire] if ripwire.is_dir() else []
 
 
-def _native_source_roots() -> list[Path]:
-    home = Path.home()
-    return claude_plugin_roots() + [
+def _native_source_roots(
+    home: Path | None = None,
+    cwd: Path | None = None,
+) -> list[Path]:
+    home = home or Path.home()
+    return claude_plugin_roots(home=home, cwd=cwd) + [
         home / ".agents" / "skills",
         home / ".codex" / "skills",
         home / ".claude" / "skills",
     ]
 
 
-def default_source_roots() -> list[Path]:
+def default_source_roots(
+    home: Path | None = None,
+    cwd: Path | None = None,
+) -> list[Path]:
     """Return all personal, provider, native, and installed skill roots."""
 
-    router = router_source_root(Path.home())
-    roots = _provider_source_roots(Path.home())
+    home = home or Path.home()
+    router = router_source_root(home)
+    roots = _provider_source_roots(home)
     if router.is_dir():
         roots.append(router)
-    return roots + _native_source_roots()
+    return roots + _native_source_roots(home, cwd)
 
 
 def selector_source_roots() -> list[Path]:

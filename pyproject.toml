@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skill-router"
-version = "0.4.5"
+version = "0.4.6"
 description = "Local, scoped routing for agent skills"
 requires-python = ">=3.11"
 readme = "README.md"

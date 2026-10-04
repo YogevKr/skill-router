@@ -19,6 +19,7 @@ from .config import (
     save_config,
 )
 from .jev import JevProvider, Recommendation, recommend_local
+from .doctor import DoctorReport, doctor
 from .manager import (
     NativeAdoptionPlan,
     apply_native_adoption,
@@ -194,7 +195,8 @@ def _manage_command(args: argparse.Namespace) -> int:
     else:
         roots = selector_source_roots()
     skills = scan_roots(roots)
-    saved = run_menu(skills, current, target=args.target, search=args.search)
+    search = args.search or args.query or ""
+    saved = run_menu(skills, current, target=args.target, search=search)
     if saved is None:
         print("not saved")
         return 0
@@ -308,6 +310,40 @@ def _status_roots(args: argparse.Namespace) -> list[Path]:
     if args.root:
         return [Path(value).expanduser() for value in args.root]
     return default_source_roots() + claude_plugin_roots()
+
+
+def _print_doctor_report(report: DoctorReport) -> int:
+    """Print a human-readable doctor report."""
+
+    print(
+        f"doctor\terrors={report.errors}\twarnings={report.warnings}\tinfo={report.infos}"
+    )
+    if not report.findings:
+        print("ok\tno drift found")
+        return 0
+    for finding in report.findings:
+        skill = f"\t{finding.skill_id}" if finding.skill_id else ""
+        path = f"\t{finding.path}" if finding.path is not None else ""
+        print(f"{finding.severity}\t{finding.code}{skill}{path}\t{finding.message}")
+    return 0 if report.ok else 1
+
+
+def _doctor_command(args: argparse.Namespace) -> int:
+    try:
+        current = load_config()
+        roots = (
+            [Path(value).expanduser() for value in args.root]
+            if args.root
+            else default_source_roots() + claude_plugin_roots()
+        )
+        report = doctor(current, source_roots=roots)
+    except (ConfigError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+        return 0 if report.ok else 1
+    return _print_doctor_report(report)
 
 
 def _sync_command(args: argparse.Namespace) -> int:
@@ -485,12 +521,14 @@ def _load_command(args: argparse.Namespace, roots: list[Path]) -> int:
 def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
     if args.command == "config":
         return _config_command(args)
-    if args.command in {"manage", "select"}:
+    if args.command in {"manage", "select", "skills"}:
         return _manage_command(args)
     if args.command == "assignments":
         return _assignments_command(args)
     if args.command == "status":
         return _status_command(args)
+    if args.command == "doctor":
+        return _doctor_command(args)
     if args.command == "sync":
         return _sync_command(args)
     if args.command == "adopt":
@@ -540,10 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     manage = subparsers.add_parser(
         "manage",
-        aliases=("select",),
+        aliases=("select", "skills"),
         help="select skills and agent targets",
     )
     manage.add_argument("--root", action="append", help="skill root; repeatable")
+    manage.add_argument("query", nargs="?", help="open with a skill search")
     manage.add_argument("--target", choices=("codex", "claude"), default="codex")
     manage.add_argument("--search", default="", help="initial skill filter")
     manage.add_argument(
@@ -558,6 +597,13 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="show router and native agent skill state")
     status.add_argument("--root", action="append", help="skill root; repeatable")
     status.add_argument("--json", action="store_true")
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="find skill ownership and exposure drift",
+    )
+    doctor_parser.add_argument("--root", action="append", help="skill root; repeatable")
+    doctor_parser.add_argument("--json", action="store_true")
 
     sync = subparsers.add_parser("sync", help="plan or apply selected skill links")
     sync.add_argument("--apply", action="store_true", help="create safe links")

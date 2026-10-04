@@ -19,6 +19,7 @@ from skill_router.config import (
     load_config,
     save_config,
 )
+from skill_router.doctor import doctor
 from skill_router.jev import JevProvider, recommend_local
 from skill_router.manager import (
     apply_native_adoption,
@@ -224,6 +225,16 @@ class ConfigTests(unittest.TestCase):
         with patch("skill_router.cli._manage_command", return_value=0) as manage:
             self.assertEqual(main(["select"]), 0)
         manage.assert_called_once()
+
+    def test_select_accepts_a_direct_search_query(self) -> None:
+        with patch("skill_router.cli._manage_command", return_value=0) as manage:
+            self.assertEqual(main(["select", "spreadsheet"]), 0)
+        self.assertEqual(manage.call_args.args[0].query, "spreadsheet")
+
+    def test_skills_alias_dispatches_to_manager(self) -> None:
+        with patch("skill_router.cli._manage_command", return_value=0) as manage:
+            self.assertEqual(main(["skills", "spreadsheet"]), 0)
+        self.assertEqual(manage.call_args.args[0].query, "spreadsheet")
 
 class StateTests(unittest.TestCase):
     def test_enabled_plugin_root_uses_latest_install(self) -> None:
@@ -563,6 +574,106 @@ class StateManagerTests(SkillFixture, unittest.TestCase):
         self.assertEqual(rows[0].router_targets, ("codex",))
         self.assertEqual(rows[0].codex_exposure, "-")
         self.assertEqual(rows[0].claude_mode, "-")
+
+
+class DoctorTests(SkillFixture, unittest.TestCase):
+    def test_doctor_reports_clean_managed_state(self) -> None:
+        codex = self.root / "home" / ".codex" / "skills"
+        source = self.root / "vault" / "python-debug"
+        source.mkdir(parents=True)
+        skill_file = source / "SKILL.md"
+        skill_file.write_text(
+            "---\nname: python-debug\ndescription: Debug Python.\n---\n",
+            encoding="utf-8",
+        )
+        destination = codex / "python-debug"
+        destination.parent.mkdir(parents=True)
+        destination.symlink_to(source, target_is_directory=True)
+        config = RouterConfig(
+            target_roots=(("codex", codex), ("claude", self.root / "home" / ".claude" / "skills")),
+            assignments=(
+                SkillAssignment(
+                    "python-debug",
+                    skill_file,
+                    frozenset({"codex"}),
+                    native_targets=frozenset({"codex"}),
+                ),
+            ),
+            managed_links=(ManagedLink("codex", "python-debug", destination, skill_file),),
+        )
+        report = doctor(config, source_roots=[self.root / "vault"], home=self.root / "home", cwd=self.root)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.errors, 0)
+        self.assertEqual(report.warnings, 0)
+
+    def test_doctor_reports_broken_managed_link(self) -> None:
+        source = self.root / "vault" / "python-debug" / "SKILL.md"
+        source.parent.mkdir(parents=True)
+        source.write_text("---\nname: python-debug\n---\n", encoding="utf-8")
+        destination = self.root / "home" / ".codex" / "skills" / "python-debug"
+        destination.parent.mkdir(parents=True)
+        config = RouterConfig(
+            target_roots=(("codex", destination.parent),),
+            assignments=(
+                SkillAssignment(
+                    "python-debug",
+                    source,
+                    frozenset({"codex"}),
+                    native_targets=frozenset({"codex"}),
+                ),
+            ),
+            managed_links=(ManagedLink("codex", "python-debug", destination, source),),
+        )
+        report = doctor(config, source_roots=[self.root / "vault"], home=self.root / "home", cwd=self.root)
+        self.assertFalse(report.ok)
+        self.assertIn("broken_managed_link", {finding.code for finding in report.findings})
+
+    def test_doctor_reports_link_for_disabled_assignment(self) -> None:
+        source = self.root / "vault" / "python-debug" / "SKILL.md"
+        source.parent.mkdir(parents=True)
+        source.write_text("---\nname: python-debug\n---\n", encoding="utf-8")
+        destination = self.root / "home" / ".codex" / "skills" / "python-debug"
+        destination.parent.mkdir(parents=True)
+        destination.symlink_to(source.parent, target_is_directory=True)
+        config = RouterConfig(
+            target_roots=(("codex", destination.parent),),
+            assignments=(
+                SkillAssignment(
+                    "python-debug",
+                    source,
+                    frozenset(),
+                    enabled=False,
+                    native_targets=frozenset(),
+                ),
+            ),
+            managed_links=(ManagedLink("codex", "python-debug", destination, source),),
+        )
+        report = doctor(config, source_roots=[self.root / "vault"], home=self.root / "home", cwd=self.root)
+        self.assertIn("stale_managed_link", {finding.code for finding in report.findings})
+
+    def test_doctor_reports_duplicate_and_unmanaged_skills(self) -> None:
+        first = self.root / "first" / "duplicate"
+        nested = self.root / "first" / "nested" / "duplicate"
+        second = self.root / "second" / "duplicate"
+        native = self.root / "home" / ".codex" / "skills" / "native-only"
+        for path in (first, nested, second, native):
+            path.mkdir(parents=True)
+            (path / "SKILL.md").write_text(
+                f"---\nname: {path.name}\n---\n",
+                encoding="utf-8",
+            )
+        config = RouterConfig(
+            target_roots=(("codex", native.parent),),
+        )
+        report = doctor(
+            config,
+            source_roots=[self.root / "first", self.root / "second"],
+            home=self.root / "home",
+            cwd=self.root,
+        )
+        codes = {finding.code for finding in report.findings}
+        self.assertIn("duplicate_skill", codes)
+        self.assertIn("unmanaged_native", codes)
 
 
 class MenuDisplayTests(SkillFixture, unittest.TestCase):

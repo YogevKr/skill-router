@@ -78,7 +78,13 @@ Open the selector with:
 
 ```sh
 skill-router manage
-# `skill-router select` is an alias.
+# `skill-router select` and `skill-router skills` are aliases.
+```
+
+Open filtered results directly:
+
+```sh
+skill-router select spreadsheet
 ```
 
 The selector shows one skill per row.
@@ -147,6 +153,22 @@ Claude.ai synced skills stay in their synced directory and require `skillOverrid
 
 Use `skill-router status --json` to inspect source ownership, filesystem exposure, and Claude mode.
 The `status` table reports `managed`, `native`, or `-` for each agent exposure.
+
+Run the drift check:
+
+```sh
+skill-router doctor
+skill-router doctor --json
+```
+
+The doctor reports broken links, duplicate names, unmanaged native skills, plugin ownership,
+and disabled Claude.ai sync skills. It exits with code `1` for actionable drift.
+
+## Codex selector note
+
+Codex owns its `/skills` and `$` menus.
+Use `/skills` for skills. The `$` menu lists apps and does not search skill names.
+The router cannot rename or merge those Codex menus.
 
 Set target roots when you need a non-default location:
 

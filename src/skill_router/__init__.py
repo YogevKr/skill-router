@@ -1,6 +1,7 @@
 """Local, scoped routing for agent skills."""
 
 from .catalog import Skill, load_skill, scan_roots
+from .doctor import DoctorFinding, DoctorReport, doctor
 from .config import (
     ConfigError,
     ManagedLink,
@@ -48,6 +49,9 @@ __all__ = [
     "apply_ripwire_adoption",
     "assignment_config",
     "SearchResult",
+    "DoctorFinding",
+    "DoctorReport",
+    "doctor",
     "Skill",
     "load_skill",
     "config_path",
