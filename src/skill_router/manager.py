@@ -42,11 +42,12 @@ class SyncAction:
 
 
 @dataclass(frozen=True)
-class RipwireAdoptionPlan:
-    """A plan to move Ripwire exposure under router control."""
+class SourceAdoptionPlan:
+    """A plan to manage exposure from an external source."""
 
     config: RouterConfig
     shared_links: tuple[Path, ...]
+    skill_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -61,64 +62,49 @@ class NativeAdoptionPlan:
     shared_paths: tuple[Path, ...]
 
 
-def ripwire_source_root(home: Path | None = None) -> Path:
-    """Return Ripwire's installed skill source root."""
-
-    return _local_share_source_root(home, "ripwire")
-
-
 def router_source_root(home: Path | None = None) -> Path:
     """Return the router-owned skill source root."""
 
-    return _local_share_source_root(home, "skill-router")
-
-
-def _local_share_source_root(home: Path | None, owner: str) -> Path:
-    """Return one owner directory under the local data root."""
-
-    return (home or Path.home()) / ".local" / "share" / owner / "skills"
-
-
-def _provider_source_roots(home: Path) -> list[Path]:
-    ripwire = ripwire_source_root(home)
-    return [ripwire] if ripwire.is_dir() else []
+    return (home or Path.home()) / ".local" / "share" / "skill-router" / "skills"
 
 
 def _native_source_roots(
     home: Path | None = None,
     cwd: Path | None = None,
+    config: RouterConfig | None = None,
 ) -> list[Path]:
     home = home or Path.home()
+    targets = {"codex": home / ".codex" / "skills", "claude": home / ".claude" / "skills"}
+    if config is not None:
+        targets.update(dict(config.target_roots))
     return claude_plugin_roots(home=home, cwd=cwd) + [
         home / ".agents" / "skills",
-        home / ".codex" / "skills",
-        home / ".claude" / "skills",
+        *targets.values(),
     ]
 
 
 def default_source_roots(
     home: Path | None = None,
     cwd: Path | None = None,
+    config: RouterConfig | None = None,
 ) -> list[Path]:
-    """Return all personal, provider, native, and installed skill roots."""
+    """Return stored, configured, assigned, and native skill roots."""
 
     home = home or Path.home()
-    router = router_source_root(home)
-    roots = _provider_source_roots(home)
-    if router.is_dir():
-        roots.append(router)
-    return roots + _native_source_roots(home, cwd)
+    config = config or RouterConfig()
+    roots = [
+        *(assignment.source for assignment in config.assignments),
+        router_source_root(home),
+        *(root for _, root in config.source_roots),
+        *_native_source_roots(home, cwd, config),
+    ]
+    return list(dict.fromkeys(roots))
 
 
-def selector_source_roots() -> list[Path]:
-    """Return router and provider roots for the default selector view."""
+def selector_source_roots(config: RouterConfig | None = None) -> list[Path]:
+    """Return all sources for the default selector view."""
 
-    home = Path.home()
-    roots = _provider_source_roots(home)
-    router = router_source_root(home)
-    if router.is_dir():
-        roots.append(router)
-    return roots
+    return default_source_roots(config=config)
 
 
 def _same_directory(left: Path, right: Path) -> bool:
@@ -320,25 +306,28 @@ def apply_native_adoption(plan: NativeAdoptionPlan) -> tuple[RouterConfig, list[
     return config_after_sync(plan.config, actions), actions
 
 
-def plan_ripwire_adoption(
+def plan_source_adoption(
     config: RouterConfig,
     skills: Iterable[Skill],
     *,
+    source_root: Path,
     home: Path | None = None,
-) -> RipwireAdoptionPlan:
-    """Plan ownership of installed Ripwire skills without changing files."""
+) -> SourceAdoptionPlan:
+    """Plan external skill exposure without changing source files."""
 
     home = home or Path.home()
-    source_root = ripwire_source_root(home).resolve()
+    source_root = source_root.expanduser().resolve()
     shared_root = home / ".agents" / "skills"
     assignments = config.assignment_map()
     shared_links: list[Path] = []
+    skill_ids: set[str] = set()
     for skill in skills:
         try:
             skill_source = skill.path.resolve()
             skill_source.relative_to(source_root)
         except (FileNotFoundError, OSError, ValueError):
             continue
+        skill_ids.add(skill.skill_id)
         shared_link = shared_root / skill.skill_id
         if shared_link.is_symlink() and shared_link.resolve() == skill_source.parent:
             shared_links.append(shared_link)
@@ -353,6 +342,8 @@ def plan_ripwire_adoption(
                 native_targets=exposed,
             )
         else:
+            if current.source.resolve() != skill_source:
+                raise ValueError(f"skill already has a different source: {skill.skill_id}")
             assignments[skill.skill_id] = replace(current, source=skill.path)
     updated = replace(
         config,
@@ -361,29 +352,46 @@ def plan_ripwire_adoption(
             sorted(assignments.values(), key=lambda item: item.skill_id.casefold())
         ),
     )
-    return RipwireAdoptionPlan(updated, tuple(sorted(shared_links)))
+    handled_paths = {
+        _destination_key(action.path)
+        for action in sync_assignments(updated, prune=True)
+        if action.action in {"keep", "unlink"}
+    }
+    # A shared target link is kept or pruned by sync, never removed twice.
+    removals = tuple(
+        path for path in sorted(shared_links)
+        if _destination_key(path) not in handled_paths
+    )
+    return SourceAdoptionPlan(updated, removals, frozenset(skill_ids))
 
 
-def apply_ripwire_adoption(plan: RipwireAdoptionPlan) -> tuple[RouterConfig, list[SyncAction]]:
-    """Remove shared Ripwire links and create router-managed links."""
+def apply_source_adoption(plan: SourceAdoptionPlan) -> tuple[RouterConfig, list[SyncAction]]:
+    """Replace matching shared links with managed agent links."""
 
-    planned = sync_assignments(plan.config, prune=True)
+    planned = [
+        action for action in sync_assignments(plan.config, prune=True)
+        if action.skill_id in plan.skill_ids
+    ]
     conflicts = [
         action
         for action in planned
-        if action.skill_id.startswith("ripwire-")
-        and action.action in {"conflict", "invalid-source", "invalid-target"}
+        if action.action in {"conflict", "invalid-source", "invalid-target"}
     ]
     if conflicts:
         details = "; ".join(
             f"{action.target}/{action.skill_id}: {action.detail or action.action}"
             for action in conflicts
         )
-        raise ValueError(f"cannot adopt Ripwire safely: {details}")
+        raise ValueError(f"cannot adopt source safely: {details}")
+    assignments = plan.config.assignment_map()
+    for path in plan.shared_links:
+        expected = assignments[path.name].source.parent.resolve()
+        if not path.is_symlink() or path.resolve() != expected:
+            raise ValueError(f"shared link changed: {path}")
+    _apply_actions(planned)
     for path in plan.shared_links:
         path.unlink()
-    actions = sync_assignments(plan.config, apply=True, prune=True)
-    return config_after_sync(plan.config, actions), actions
+    return config_after_sync(plan.config, planned), planned
 
 
 def assignment_config(
@@ -414,11 +422,10 @@ def assignment_config(
             enabled=bool(targets or native_values),
             native_targets=native_values,
         )
-    return RouterConfig(
-        jev_enabled=config.jev_enabled,
+    return replace(
+        config,
         target_roots=tuple(sorted(config.roots().items())),
         assignments=tuple(sorted(assignments.values(), key=lambda item: item.skill_id.casefold())),
-        managed_links=config.managed_links,
     )
 
 
@@ -443,6 +450,7 @@ def _native_selection(
         )
     if states is None:
         return selected
+    roots = config.roots()
     for skill_id, state in states.items():
         assignment = assignments.get(skill_id)
         if assignment is not None and (
@@ -450,10 +458,11 @@ def _native_selection(
         ):
             continue
         targets = selected.setdefault(skill_id, set())
-        if state.codex_exposure in {"native", "managed"}:
-            targets.add("codex")
-        if state.claude_exposure in {"native", "managed"}:
-            targets.add("claude")
+        # Runtime exposure from plugins, bundles, or shared roots is not a link request.
+        for target, exposure in (("codex", state.codex_exposure), ("claude", state.claude_exposure)):
+            destination = roots[target].expanduser() / skill_id / "SKILL.md"
+            if exposure in {"native", "managed"} and destination.is_file():
+                targets.add(target)
     return selected
 
 
@@ -952,16 +961,39 @@ def _assignment_actions(
     return actions
 
 
+def _destination_key(path: Path) -> tuple[Path, str]:
+    """Identify an entry without following the entry's own symlink."""
+
+    path = path.expanduser()
+    return path.parent.resolve(), path.name
+
+
 def _prune_actions(
     managed: Iterable[ManagedLink],
     active: set[tuple[str, str]],
+    active_paths: set[tuple[Path, str]],
+    conflict_paths: set[tuple[Path, str]],
 ) -> list[SyncAction]:
     actions: list[SyncAction] = []
+    removed_paths: set[tuple[Path, str]] = set()
     for link in managed:
         if (link.target, link.skill_id) in active:
             continue
         if link.path.is_symlink() and link.path.resolve() == link.source.parent.resolve():
-            actions.append(SyncAction("unlink", link.target, link.skill_id, link.path, link.source))
+            path_key = _destination_key(link.path)
+            if path_key in conflict_paths:
+                actions.append(SyncAction(
+                    "skip-prune", link.target, link.skill_id, link.path, link.source,
+                    "keep ownership until the shared destination conflict is resolved",
+                ))
+            elif path_key in active_paths or path_key in removed_paths:
+                actions.append(SyncAction(
+                    "forget", link.target, link.skill_id, link.path, link.source,
+                    "remove this target's ownership; sync handles the shared path",
+                ))
+            else:
+                actions.append(SyncAction("unlink", link.target, link.skill_id, link.path, link.source))
+                removed_paths.add(path_key)
         else:
             actions.append(
                 SyncAction(
@@ -977,10 +1009,15 @@ def _prune_actions(
 
 
 def _apply_actions(actions: Iterable[SyncAction]) -> None:
+    linked_paths: set[tuple[Path, str]] = set()
     for action in actions:
         if action.action == "link":
+            path_key = _destination_key(action.path)
+            if path_key in linked_paths:
+                continue
             action.path.parent.mkdir(parents=True, exist_ok=True)
             os.symlink(action.source.parent.resolve(), action.path, target_is_directory=True)
+            linked_paths.add(path_key)
         elif action.action == "unlink":
             action.path.unlink()
 
@@ -1004,7 +1041,17 @@ def sync_assignments(
         actions.extend(_assignment_actions(assignment, roots, active))
 
     if prune:
-        actions.extend(_prune_actions(config.managed_links, active))
+        active_paths = {
+            _destination_key(action.path)
+            for action in actions
+            if action.action in {"link", "keep"}
+        }
+        conflict_paths = {
+            _destination_key(action.path)
+            for action in actions
+            if action.action == "conflict"
+        }
+        actions.extend(_prune_actions(config.managed_links, active, active_paths, conflict_paths))
 
     if not apply:
         return actions
@@ -1021,7 +1068,7 @@ def config_after_sync(config: RouterConfig, actions: Iterable[SyncAction]) -> Ro
     }
     for action in actions:
         key = (action.target, action.skill_id)
-        if action.action == "unlink":
+        if action.action in {"unlink", "forget"}:
             links.pop(key, None)
         elif action.action in {"link", "keep"}:
             links[key] = ManagedLink(action.target, action.skill_id, action.path, action.source)

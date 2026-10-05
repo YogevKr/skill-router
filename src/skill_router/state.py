@@ -95,16 +95,17 @@ def claude_skill_overrides(*, home: Path | None = None, cwd: Path | None = None)
     return overrides
 
 
-def _source_label(path: Path) -> str:
+def _source_label(path: Path, config: RouterConfig) -> str:
     parts = path.parts
     if "skill-router" in parts and ".local" in parts:
         return "router"
-    if "ripwire" in parts and ".local" in parts:
-        return "ripwire"
     if "plugins" in parts and (".claude" in parts or "claude" in parts):
         return "plugin"
     if "synced" in parts and ".claude" in parts:
         return "claude.ai sync"
+    for name, root in sorted(config.source_roots, key=lambda item: len(item[1].parts), reverse=True):
+        if _under(path, root):
+            return f"source:{name}"
     if ".claude" in parts or ".agents" in parts:
         return "userSettings"
     if ".codex" in parts:
@@ -190,16 +191,17 @@ def inspect_skills(
     overrides = claude_skill_overrides(home=home, cwd=cwd)
     home = home or Path.home()
     shared_native_roots = (home / ".agents" / "skills",)
+    plugin_roots = claude_plugin_roots(home=home, cwd=cwd)
     assignments = config.assignment_map()
     managed = {(roots[link.target].as_posix(), link.skill_id) for link in config.managed_links}
     result: list[SkillState] = []
     for skill in skills:
         assignment = assignments.get(skill.skill_id)
         targets = tuple(sorted(assignment.targets)) if assignment and assignment.enabled else ()
-        source = _source_label(skill.path)
+        source = _source_label(skill.path, config)
         claude_exposure = (
             "native"
-            if source == "plugin"
+            if source == "plugin" and any(_under(skill.path, root) for root in plugin_roots)
             else _exposure(skill, roots["claude"], managed, shared_native_roots)
         )
         override = overrides.get(skill.skill_id) or overrides.get(f"anthropic-skills:{skill.skill_id}")

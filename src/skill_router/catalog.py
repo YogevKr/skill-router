@@ -75,18 +75,32 @@ def _safe_skill_path(root: Path, candidate: Path) -> Path | None:
     return candidate_resolved
 
 
+def _skill_files(root: Path) -> Iterable[Path]:
+    """Yield safe skill files from one directory or one exact skill path."""
+
+    root = root.expanduser()
+    if root.is_symlink():
+        return
+    if root.is_file() and root.name == "SKILL.md":
+        candidates = [root]
+        anchor = root.parent
+    elif root.is_dir():
+        candidates = sorted(root.rglob("SKILL.md"))
+        anchor = root
+    else:
+        return
+    for candidate in candidates:
+        safe_path = _safe_skill_path(anchor, candidate)
+        if safe_path is not None:
+            yield safe_path
+
+
 def scan_roots(roots: Iterable[str | os.PathLike[str]]) -> list[Skill]:
-    """Scan explicit roots, preserving the first skill with each ID."""
+    """Scan directories or exact skill paths, preserving the first skill ID."""
 
     found: dict[str, Skill] = {}
     for raw_root in roots:
-        root = Path(raw_root).expanduser()
-        if not root.is_dir() or root.is_symlink():
-            continue
-        for candidate in sorted(root.rglob("SKILL.md")):
-            safe_path = _safe_skill_path(root, candidate)
-            if safe_path is None:
-                continue
+        for safe_path in _skill_files(Path(raw_root)):
             try:
                 skill = _parse_skill(safe_path)
             except (OSError, UnicodeError):
@@ -103,4 +117,3 @@ def load_skill(skill_id: str, roots: Iterable[str | os.PathLike[str]]) -> Skill:
         if skill.skill_id.casefold() == wanted or skill.name.casefold() == wanted:
             return skill
     raise KeyError(f"skill not found: {skill_id}")
-

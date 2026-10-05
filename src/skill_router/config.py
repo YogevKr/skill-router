@@ -53,12 +53,13 @@ class ManagedLink:
 
 @dataclass(frozen=True)
 class RouterConfig:
-    """Settings that control optional providers."""
+    """Settings for routing, skill sources, and agent exposure."""
 
     jev_enabled: bool = False
     target_roots: tuple[tuple[str, Path], ...] = ()
     assignments: tuple[SkillAssignment, ...] = ()
     managed_links: tuple[ManagedLink, ...] = ()
+    source_roots: tuple[tuple[str, Path], ...] = ()
 
     def roots(self) -> dict[str, Path]:
         """Return configured target roots with native defaults."""
@@ -103,6 +104,23 @@ def _parse_target_roots(data: dict[str, object]) -> tuple[tuple[str, Path], ...]
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ConfigError(f"config target path must be text: {target}")
         values.append((target, Path(raw_path).expanduser()))
+    return tuple(sorted(values))
+
+
+def _parse_source_roots(data: dict[str, object]) -> tuple[tuple[str, Path], ...]:
+    sources = data.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ConfigError("config section 'sources' must be a table")
+    values: list[tuple[str, Path]] = []
+    for name, raw_path in sources.items():
+        if not name.strip() or name == "native":
+            raise ConfigError(f"invalid source name: {name}")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ConfigError(f"config source path must be text: {name}")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            raise ConfigError(f"config source path must be absolute: {name}")
+        values.append((name, path))
     return tuple(sorted(values))
 
 
@@ -196,6 +214,7 @@ def load_config(path: Path | None = None) -> RouterConfig:
         target_roots=_parse_target_roots(data),
         assignments=_parse_assignment_table(data),
         managed_links=_parse_managed_link_list(data),
+        source_roots=_parse_source_roots(data),
     )
 
 
@@ -218,26 +237,35 @@ def save_config(config: RouterConfig, path: Path | None = None) -> Path:
             file.write(f"[jev]\nenabled = {'true' if config.jev_enabled else 'false'}\n")
             file.write("\n[targets]\n")
             for target_name, root in sorted(config.roots().items()):
-                file.write(f"{target_name} = {json.dumps(root.as_posix())}\n")
+                file.write(f"{target_name} = {_toml_string(root.as_posix())}\n")
+            file.write("\n[sources]\n")
+            for name, root in sorted(config.source_roots):
+                file.write(f"{_toml_string(name)} = {_toml_string(root.as_posix())}\n")
             for assignment in sorted(config.assignments, key=lambda item: item.skill_id.casefold()):
-                file.write(f"\n[skills.{json.dumps(assignment.skill_id)}]\n")
-                file.write(f"source = {json.dumps(assignment.source.as_posix())}\n")
+                file.write(f"\n[skills.{_toml_string(assignment.skill_id)}]\n")
+                file.write(f"source = {_toml_string(assignment.source.as_posix())}\n")
                 file.write(f"enabled = {'true' if assignment.enabled else 'false'}\n")
-                targets = ", ".join(json.dumps(target) for target in sorted(assignment.targets))
+                targets = ", ".join(_toml_string(target) for target in sorted(assignment.targets))
                 file.write(f"targets = [{targets}]\n")
                 if assignment.native_targets is not None:
                     native_targets = ", ".join(
-                        json.dumps(target) for target in sorted(assignment.native_targets)
+                        _toml_string(target) for target in sorted(assignment.native_targets)
                     )
                     file.write(f"native_targets = [{native_targets}]\n")
             for link in config.managed_links:
                 file.write("\n[[managed_links]]\n")
-                file.write(f"target = {json.dumps(link.target)}\n")
-                file.write(f"skill_id = {json.dumps(link.skill_id)}\n")
-                file.write(f"path = {json.dumps(link.path.as_posix())}\n")
-                file.write(f"source = {json.dumps(link.source.as_posix())}\n")
+                file.write(f"target = {_toml_string(link.target)}\n")
+                file.write(f"skill_id = {_toml_string(link.skill_id)}\n")
+                file.write(f"path = {_toml_string(link.path.as_posix())}\n")
+                file.write(f"source = {_toml_string(link.source.as_posix())}\n")
         os.replace(temporary, target)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return target
+
+
+def _toml_string(value: str) -> str:
+    """Quote Unicode scalars without JSON surrogate pairs or raw DEL."""
+
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")

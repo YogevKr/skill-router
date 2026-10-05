@@ -2,8 +2,8 @@
 
 `skill-router` keeps task skills outside the agent context until a local search selects one.
 
-Search and recommend commands scan only explicit vault roots.
-The separate manager can inspect native Codex and Claude skill roots when you run it.
+Search and recommend commands scan configured sources, stored skills, saved assignments, and vault roots.
+The manager includes native Codex and Claude skill roots by default.
 This keeps normal routing scoped to a small catalog.
 
 ## Design
@@ -41,7 +41,11 @@ PYTHONPATH=src python -m skill_router.cli load python-debug \
 ```
 
 Set `SKILL_ROUTER_ROOT` to a colon-separated list of roots for repeated use.
-The default roots are `~/.agents/skill-vault` and `.agents/skill-vault`.
+The default roots include `~/.agents/skill-vault`, `.agents/skill-vault`, and the router store.
+Configured sources and exact saved source files also participate.
+Saved source files take precedence when multiple roots contain the same skill ID.
+`--root` and `SKILL_ROUTER_ROOT` each replace these defaults.
+Routing does not scan unassigned native skills automatically.
 
 ## Persistent provider setting
 
@@ -88,8 +92,9 @@ skill-router select spreadsheet
 ```
 
 The selector shows one skill per row.
-By default, it shows router and provider sources.
-Use `--all` to include plugin, sync, native, and bundled sources.
+By default, it includes router, configured, assigned, plugin, sync, native, and bundled sources.
+`--all` remains accepted for compatibility and has the same behavior.
+Custom agent roots from `config target set` participate in discovery.
 In a terminal, use Up and Down to move between skills.
 Use Left and Right to move between the four columns.
 The active header starts with `>` and the active cell uses reverse color.
@@ -111,6 +116,9 @@ The four columns store separate selections:
 | `router codex` | The router can assign this skill to Codex. |
 | `codex native` | Sync may expose this skill in Codex's native skill root. |
 | `claude native` | Sync may expose this skill in Claude's native skill root. |
+
+Native selections request direct links. Plugin, bundled, synced, and shared exposure does not select new links automatically.
+Use `status` to inspect actual runtime exposure.
 
 The active column marks the cell that Space changes.
 For example, `> NATIVE CODEX` means Space changes `codex native`.
@@ -195,22 +203,52 @@ skill-router sync --apply
 The sync command never replaces an existing file, directory, or different symlink.
 Use `--prune --apply` to remove only symlinks that this tool recorded and that still point to their source.
 It never removes direct native folders or their source files.
+Shared target directories retain each link until all targets release it.
 The default mode makes no filesystem changes.
 
-## Adopt Ripwire skills
+## Configure extra sources
 
-Ripwire installs its skills in `~/.local/share/ripwire/skills` and exposes them with symlinks in
-`~/.agents/skills`. Adopt those links so the router controls exposure in Codex and Claude:
+Register any skill directory with a name:
 
 ```sh
-skill-router adopt ripwire
-skill-router adopt ripwire --apply
+skill-router config source set team ~/team-skills
+skill-router config source show --json
 ```
 
-The first command prints the plan. The second removes only Ripwire symlinks from `~/.agents/skills`,
-creates router-managed links in the configured agent roots, and records the assignments. It never removes
-Ripwire source files. Run `skill-router manage` after adoption to change the four exposure columns.
-If Ripwire runs `skills/install.sh --codex` again, run the adoption command again.
+The directory must exist. The command stores an absolute path in the `[sources]` table.
+The name `native` is reserved for native adoption.
+Every extra source uses the same discovery, labeling, and adoption rules.
+The router does not scan arbitrary application directories.
+
+Remove a registration with `skill-router config source remove team`.
+Removal preserves skill files, assignments, and managed links.
+Saved assignments remain visible through their recorded paths.
+
+## Adopt external source links
+
+Adopt shared links from a configured source:
+
+```sh
+skill-router adopt team
+skill-router adopt team --apply
+```
+
+The first command prints the plan. The second replaces matching shared links with managed agent links.
+Adoption preserves source files and existing selections. It changes only skills from the selected source.
+Conflicting destinations or changed shared links stop adoption before any changes.
+Run `skill-router manage` after adoption to change exposure.
+
+Older versions treated Ripwire as a built-in source.
+Register its directory once to retain discovery of new, unassigned skills:
+
+```sh
+skill-router config source set ripwire ~/.local/share/ripwire/skills
+skill-router adopt ripwire
+```
+
+Existing assignments continue to work without registration.
+The Python adoption API now uses `SourceAdoptionPlan`, `plan_source_adoption`, and `apply_source_adoption`.
+Pass `source_root` to `plan_source_adoption`. Source discovery accepts a `RouterConfig` through `config`.
 
 ## Adopt a native skill
 

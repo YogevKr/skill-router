@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .catalog import Skill, _parse_skill, _safe_skill_path, scan_roots
+from .catalog import Skill, _parse_skill, _skill_files, scan_roots
 from .config import RouterConfig
 from .manager import default_source_roots, sync_assignments
-from .state import SkillState, claude_plugin_roots, inspect_skills
+from .state import SkillState, inspect_skills
 
 
 SEVERITIES = ("error", "warning", "info")
@@ -84,6 +84,7 @@ class DoctorReport:
 def _skill_occurrences(roots: Iterable[Path]) -> dict[str, list[Skill]]:
     occurrences: dict[str, list[Skill]] = {}
     seen_roots: set[Path] = set()
+    seen_paths: set[Path] = set()
     for root in roots:
         root = root.expanduser()
         try:
@@ -93,12 +94,10 @@ def _skill_occurrences(roots: Iterable[Path]) -> dict[str, list[Skill]]:
         if key in seen_roots:
             continue
         seen_roots.add(key)
-        if not root.is_dir() or root.is_symlink():
-            continue
-        for candidate in sorted(root.rglob("SKILL.md")):
-            safe_path = _safe_skill_path(root, candidate)
-            if safe_path is None:
+        for safe_path in _skill_files(root):
+            if safe_path in seen_paths:
                 continue
+            seen_paths.add(safe_path)
             try:
                 skill = _parse_skill(safe_path)
             except (OSError, UnicodeError):
@@ -115,7 +114,7 @@ def _under(path: Path, root: Path) -> bool:
     return True
 
 
-def _duplicate_severity(skills: Iterable[Skill]) -> str:
+def _duplicate_severity(skills: Iterable[Skill], config: RouterConfig) -> str:
     """Return warning for competing personal sources, info for provider overlap."""
 
     kinds: set[str] = set()
@@ -123,7 +122,7 @@ def _duplicate_severity(skills: Iterable[Skill]) -> str:
         parts = skill.path.parts
         if "skill-router" in parts and ".local" in parts:
             kinds.add("router")
-        elif "ripwire" in parts and ".local" in parts:
+        elif any(_under(skill.path, root) for _, root in config.source_roots):
             kinds.add("provider")
         elif "plugins" in parts or "synced" in parts or ".system" in parts:
             kinds.add("provider")
@@ -279,6 +278,7 @@ def _assignment_findings(config: RouterConfig, findings: list[DoctorFinding]) ->
             "invalid-source": "assignment_source_invalid",
             "invalid-target": "assignment_target_invalid",
             "unlink": "stale_managed_link",
+            "forget": "stale_link_ownership",
         }.get(action.action, "sync_drift")
         findings.append(
             DoctorFinding(
@@ -327,8 +327,8 @@ def doctor(
     """Inspect local skill sources, links, and provider ownership."""
 
     roots = list(
-        source_roots
-        or (default_source_roots(home=home, cwd=cwd) + claude_plugin_roots(home=home, cwd=cwd))
+        source_roots if source_roots is not None
+        else default_source_roots(home=home, cwd=cwd, config=config)
     )
     findings: list[DoctorFinding] = []
     occurrences = _skill_occurrences(roots)
@@ -340,7 +340,7 @@ def doctor(
             paths = ", ".join(str(skill.path) for skill in skills)
             findings.append(
                 DoctorFinding(
-                    _duplicate_severity(skills),
+                    _duplicate_severity(skills, config),
                     "duplicate_skill",
                     f"skill appears in multiple sources: {paths}",
                     skill_id,

@@ -23,12 +23,12 @@ from .doctor import DoctorReport, doctor
 from .manager import (
     NativeAdoptionPlan,
     apply_native_adoption,
-    apply_ripwire_adoption,
+    apply_source_adoption,
     config_after_sync,
     default_source_roots,
     plan_native_adoption,
-    plan_ripwire_adoption,
-    ripwire_source_root,
+    plan_source_adoption,
+    router_source_root,
     run_menu,
     selector_source_roots,
     sync_assignments,
@@ -36,7 +36,7 @@ from .manager import (
     native_skill,
 )
 from .search import search_skills
-from .state import claude_plugin_roots, inspect_skills
+from .state import inspect_skills
 
 
 def default_roots(cwd: Path | None = None) -> list[Path]:
@@ -46,11 +46,14 @@ def default_roots(cwd: Path | None = None) -> list[Path]:
     if configured:
         return [Path(value).expanduser() for value in configured.split(os.pathsep) if value]
     base = cwd or Path.cwd()
-    roots = [Path.home() / ".agents" / "skill-vault", base / ".agents" / "skill-vault"]
-    ripwire = ripwire_source_root()
-    if ripwire.is_dir():
-        roots.insert(0, ripwire)
-    return roots
+    config = load_config()
+    return list(dict.fromkeys([
+        *(assignment.source for assignment in config.assignments),
+        router_source_root(),
+        *(root for _, root in config.source_roots),
+        Path.home() / ".agents" / "skill-vault",
+        base / ".agents" / "skill-vault",
+    ]))
 
 
 def _roots(values: list[str] | None) -> list[Path]:
@@ -145,6 +148,8 @@ def _config_command(args: argparse.Namespace) -> int:
 
     if args.config_action == "target":
         return _target_command(current, target, args)
+    if args.config_action == "source":
+        return _source_command(current, args)
 
     updated = replace(current, jev_enabled=args.state == "enabled")
     save_config(updated)
@@ -156,6 +161,7 @@ def _show_config(current: RouterConfig, target: Path, as_json: bool) -> int:
         "path": str(target),
         "jev": {"enabled": current.jev_enabled},
         "targets": {name: str(path) for name, path in current.roots().items()},
+        "sources": {name: str(path) for name, path in current.source_roots},
         "assigned_skills": sum(assignment.enabled for assignment in current.assignments),
     }
     if as_json:
@@ -163,6 +169,37 @@ def _show_config(current: RouterConfig, target: Path, as_json: bool) -> int:
     else:
         print(f"path\t{target}")
         print(f"jev.enabled\t{str(current.jev_enabled).lower()}")
+        for name, path in current.source_roots:
+            print(f"source\t{name}\t{path}")
+    return 0
+
+
+def _source_command(current: RouterConfig, args: argparse.Namespace) -> int:
+    roots = dict(current.source_roots)
+    if args.source_action == "show":
+        if args.json:
+            print(json.dumps({name: str(path) for name, path in roots.items()}, indent=2))
+        else:
+            for name, path in roots.items():
+                print(f"{name}\t{path}")
+        return 0
+    name = args.source_name
+    if not name.strip() or name == "native":
+        print(f"invalid source name: {name}", file=sys.stderr)
+        return 2
+    if args.source_action == "remove":
+        if name not in roots:
+            print(f"unknown source: {name}", file=sys.stderr)
+            return 2
+        del roots[name]
+    else:
+        path = Path(args.source_path).expanduser().absolute()
+        if not path.is_dir() or path.is_symlink():
+            print(f"source must be an existing directory, not a symlink: {path}", file=sys.stderr)
+            return 2
+        roots[name] = path
+    save_config(replace(current, source_roots=tuple(sorted(roots.items()))))
+    print(f"saved\tsource\t{name}")
     return 0
 
 
@@ -202,10 +239,8 @@ def _manage_command(args: argparse.Namespace) -> int:
         return 2
     if args.root:
         roots = [Path(value).expanduser() for value in args.root]
-    elif args.all:
-        roots = default_source_roots()
     else:
-        roots = selector_source_roots()
+        roots = selector_source_roots(current)
     skills = scan_roots(roots)
     search = args.search or args.query or ""
     saved = run_menu(skills, current, target=args.target, search=search)
@@ -295,7 +330,7 @@ def _status_command(args: argparse.Namespace) -> int:
 def _status_values(current: RouterConfig, args: argparse.Namespace) -> list[dict[str, object]]:
     """Build status rows from configured and discovered skills."""
 
-    roots = _status_roots(args)
+    roots = _status_roots(args, current)
     assignments = current.assignment_map()
     return [
         {
@@ -316,12 +351,12 @@ def _status_values(current: RouterConfig, args: argparse.Namespace) -> list[dict
     ]
 
 
-def _status_roots(args: argparse.Namespace) -> list[Path]:
-    """Return explicit status roots, or the managed roots plus plugins."""
+def _status_roots(args: argparse.Namespace, current: RouterConfig) -> list[Path]:
+    """Return explicit status roots, or all configured and native sources."""
 
     if args.root:
         return [Path(value).expanduser() for value in args.root]
-    return default_source_roots() + claude_plugin_roots()
+    return default_source_roots(config=current)
 
 
 def _print_doctor_report(report: DoctorReport) -> int:
@@ -346,7 +381,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
         roots = (
             [Path(value).expanduser() for value in args.root]
             if args.root
-            else default_source_roots() + claude_plugin_roots()
+            else default_source_roots(config=current)
         )
         report = doctor(current, source_roots=roots)
     except (ConfigError, OSError, ValueError) as error:
@@ -389,28 +424,29 @@ def _sync_command(args: argparse.Namespace) -> int:
 
 
 def _adopt_command(args: argparse.Namespace) -> int:
-    if args.provider != "ripwire":
-        print(f"unsupported provider: {args.provider}", file=sys.stderr)
-        return 2
-    source_root = ripwire_source_root()
-    if not source_root.is_dir():
-        print(f"Ripwire skill root not found: {source_root}", file=sys.stderr)
+    if args.skill_id:
+        print("source adoption does not accept a skill ID", file=sys.stderr)
         return 2
     try:
         current = load_config()
+        source_root = dict(current.source_roots).get(args.source)
+        if source_root is None:
+            raise ValueError(f"unknown source: {args.source}; use config source set NAME PATH")
+        if not source_root.is_dir() or source_root.is_symlink():
+            raise ValueError(f"source must be an existing directory, not a symlink: {source_root}")
         skills = scan_roots([source_root])
-        plan = plan_ripwire_adoption(current, skills)
+        plan = plan_source_adoption(current, skills, source_root=source_root)
         planned = sync_assignments(plan.config, prune=True)
     except (ConfigError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    print("provider\tripwire")
+    print(f"source\t{args.source}")
     print(f"skills\t{len(skills)}")
     print(f"shared-links\t{len(plan.shared_links)}")
     for path in plan.shared_links:
         print(f"unlink\tshared\t{path.name}\t{path}")
     for action in planned:
-        if not action.skill_id.startswith("ripwire-"):
+        if action.skill_id not in plan.skill_ids:
             continue
         detail = f"\t{action.detail}" if action.detail else ""
         print(f"{action.action}\t{action.target}\t{action.skill_id}\t{action.path}{detail}")
@@ -418,7 +454,7 @@ def _adopt_command(args: argparse.Namespace) -> int:
         print("dry-run\tuse --apply to adopt")
         return 0
     try:
-        saved, actions = apply_ripwire_adoption(plan)
+        saved, actions = apply_source_adoption(plan)
         path = save_config(saved)
     except (ConfigError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
@@ -464,7 +500,7 @@ def _native_adoption_plan(
         skill = next(
             (
                 value
-                for value in scan_roots(default_source_roots())
+                for value in scan_roots(default_source_roots(config=current))
                 if value.skill_id.casefold() == skill_id.casefold()
             ),
             None,
@@ -544,7 +580,7 @@ def _dispatch_persistent_command(args: argparse.Namespace) -> int | None:
     if args.command == "sync":
         return _sync_command(args)
     if args.command == "adopt":
-        return _adopt_native_command(args) if args.provider == "native" else _adopt_command(args)
+        return _adopt_native_command(args) if args.source == "native" else _adopt_command(args)
     return None
 
 
@@ -593,6 +629,16 @@ def build_parser() -> argparse.ArgumentParser:
     target_set.add_argument("target_name", choices=("codex", "claude"))
     target_set.add_argument("target_path")
 
+    source_config = config_subparsers.add_parser("source", help="manage extra skill sources")
+    source_subparsers = source_config.add_subparsers(dest="source_action", required=True)
+    source_show = source_subparsers.add_parser("show", help="show extra skill sources")
+    source_show.add_argument("--json", action="store_true")
+    source_set = source_subparsers.add_parser("set", help="set a named skill directory")
+    source_set.add_argument("source_name")
+    source_set.add_argument("source_path")
+    source_remove = source_subparsers.add_parser("remove", help="forget a source without deleting files")
+    source_remove.add_argument("source_name")
+
     manage = subparsers.add_parser(
         "manage",
         aliases=("select", "skills"),
@@ -605,7 +651,7 @@ def build_parser() -> argparse.ArgumentParser:
     manage.add_argument(
         "--all",
         action="store_true",
-        help="include plugin, sync, native, and bundled sources",
+        help="compatibility flag; all sources are included by default",
     )
 
     assignments = subparsers.add_parser("assignments", help="show saved skill assignments")
@@ -628,7 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--json", action="store_true")
 
     adopt = subparsers.add_parser("adopt", help="take ownership of external skill links")
-    adopt.add_argument("provider", choices=("ripwire", "native"))
+    adopt.add_argument("source", help="configured source name, or native")
     adopt.add_argument("skill_id", nargs="?", help="skill ID for native adoption")
     adopt.add_argument("--apply", action="store_true", help="apply the adoption plan")
 
@@ -644,7 +690,11 @@ def main(argv: list[str] | None = None) -> int:
     persistent_result = _dispatch_persistent_command(args)
     if persistent_result is not None:
         return persistent_result
-    roots = _roots(args.root)
+    try:
+        roots = _roots(args.root)
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     if args.command == "search":
         return _search_command(args, roots)
 
