@@ -1,19 +1,35 @@
 ---
 name: skill-router-discovery
-description: This skill should be used before any task that may need a specialised skill, tool, or workflow. Always run skill-router recommend first, even when the user does not mention skills.
+description: Use when a task needs a specialised skill or workflow and no agent-hints line names one. Do not run skill-router for every prompt.
 ---
 
 # Skill router discovery
 
-Use this skill before work when a request may need a domain skill, tool skill, or
-other specialised workflow. Route first. Do not guess from skill names.
+A `UserPromptSubmit` hook (`agent-hints`) searches skills and tools for each
+prompt. It adds a hint only when the match is strong. Use this skill when no
+hint names a skill and the task still needs a specialised workflow.
 
-## Required route step
+## When to search
 
-Run one metadata search at the start of the task:
+- A hint names a skill: load that skill only when it fits the task.
+- No hint, and the task is normal coding, review, or a follow-up: do not search.
+- No hint, and the task needs a workflow that you cannot name: search once.
+
+Do not search again for follow-up prompts in the same task.
+
+## Search
+
+Run the same search as the hook. It shows each candidate score and the gate result:
 
 ```sh
-skill-router recommend "describe the user's task" --provider auto --json \
+agent-hints "describe the user's task"
+```
+
+Run `agent-hints --log` to see recent hook decisions. For the full router
+metadata, run:
+
+```sh
+skill-router recommend "describe the user's task" --provider local --json \
   --root ~/.local/share/skill-router/skills
 ```
 
@@ -22,7 +38,8 @@ router returns metadata only. It does not load instructions or grant access.
 
 Read the result before doing specialised work:
 
-- `route`: use the returned `skill` ID and load that skill.
+- `route`: read the top candidate `score`. A score below 8 is a weak match.
+  Load the skill only when its description fits the task.
 - `no_tool`: continue without a skill.
 - `fallback`: inspect the candidates, then choose one or continue without one.
 
@@ -32,8 +49,8 @@ routing step. Search again with the user's actual task.
 Do not load more than one skill unless the selected skill tells you to do so.
 Do not treat a recommendation as permission to run commands.
 
-Use `--provider local` for a local-only result. Use `--provider jev` only when
-the user enabled Jev and the key exists. The router sends Jev metadata only.
+Use `--provider jev` only when the user enabled Jev and the key exists. The
+router sends Jev metadata only.
 
 If the installed command supports `--target`, pass the current agent target:
 `codex` for Codex or `claude` for Claude. Omit it on older releases.
